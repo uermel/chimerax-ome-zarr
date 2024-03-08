@@ -45,7 +45,12 @@ def get_pixelsize(zattrs: zarr.attrs.Attributes) -> List[Tuple[float, float, flo
 
 
 def _open(
-    session, root: zarr.storage, scales: List[int], full_name: str = "", name: str = ""
+    session,
+    root: zarr.storage,
+    scales: List[int],
+    full_name: str = "",
+    name: str = "",
+    initial_step: Tuple[int, int, int] = (4, 4, 4),
 ) -> Tuple[List[Model], str]:
 
     model = Model(name, session)
@@ -74,8 +79,12 @@ def _open(
         name, array = arrays_cached[scale]
         dgd = ZarrGrid(array, step=sizes[scale], name=name)
         ijk_min = (0, 0, dgd.size[2] // 2)
-        ijk_max = (dgd.size[0], dgd.size[1], dgd.size[2] // 2)
-        ijk_step = (4, 4, 4)
+        ijk_max = (
+            dgd.size[0] // initial_step[0],
+            dgd.size[1] // initial_step[1],
+            dgd.size[2] // 2 // initial_step[2],
+        )
+        ijk_step = initial_step
         vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))
         vol.set_display_style("image")
         model.add([vol])
@@ -105,11 +114,19 @@ def open_ome_zarr_from_fs(
     fs: AbstractFileSystem,
     path: str,
     scales: List[int] = None,
+    initial_step: Tuple[int, int, int] = (4, 4, 4),
 ):
     root = zarr.storage.FSStore(
         path, key_separator="/", mode="r", dimension_separator="/", fs=fs
     )
-    return _open(session, root, scales, full_name=path, name=os.path.basename(path))
+    return _open(
+        session,
+        root,
+        scales,
+        full_name=path,
+        name=os.path.basename(path),
+        initial_step=initial_step,
+    )
 
 
 # def fetch_tomogram(session, identifier: str, ignore_cache: bool = False, **kw):
