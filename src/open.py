@@ -1,8 +1,8 @@
 import os
 import zarr
 import zarr.attrs
-import dask.array as da
-
+from zarr.storage import FSStore
+from fsspec import AbstractFileSystem
 
 from chimerax.core.models import Model
 from chimerax.map.volume import Volume, show_volume_dialog
@@ -44,49 +44,34 @@ def get_pixelsize(zattrs: zarr.attrs.Attributes) -> List[Tuple[float, float, flo
     return sizes
 
 
-def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
+def _open(
+    session, root: zarr.storage, scales: List[int], full_name: str = "", name: str = ""
+) -> Tuple[List[Model], str]:
 
-    model = Model(os.path.basename(data), session)
+    model = Model(name, session)
 
-    # Work around ChimeraX
-    if fs:
-        data = f"{fs}://" + data
-
-    # The initial store to get sizes and units
-    root = zarr.storage.FSStore(
-        f"{data}", key_separator="/", mode="r", dimension_separator="/"
-    )
     group = zarr.open(root, mode="r")
-    arrays = list(group.arrays())
     attrs = group.attrs
 
     # Get pixelsizes in Angstrom from unit and scale transformations
     ufac = get_unit_factor(attrs)
-    # print(f"ufac: {ufac}")
     sizes = get_pixelsize(attrs)
-    # print(f"sizes: {sizes}")
     sizes = [(ufac[0] * s[0], ufac[1] * s[1], ufac[2] * s[2]) for s in sizes]
 
     # The cached store, group and arrays
     root_cached = zarr.LRUStoreCache(
         root,
-        max_size=None,  # arrays[0][1].size,
+        max_size=None,
     )
     group_cached = zarr.open(root_cached, mode="r")
     arrays_cached = list(group_cached.arrays())
 
     # If no scales requested, load lowest by default
-    # print(f"num arrays: {len(arrays_cached)}")
     if not scales:
         scales = [len(arrays_cached) - 1]
 
-    # print(f"scales: {scales}")
-    # print(sizes)
-
     for scale in scales:
         name, array = arrays_cached[scale]
-        # print(type(array))
-        # agd = ArrayGridData(array, step=sizes[scale], name=name)#f"{os.path.basename(data)}/{name}")
         dgd = ZarrGrid(array, step=sizes[scale], name=name)
         ijk_min = (0, 0, dgd.size[2] // 2)
         ijk_max = (dgd.size[0], dgd.size[1], dgd.size[2] // 2)
@@ -96,7 +81,35 @@ def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
         model.add([vol])
 
     show_volume_dialog(session)
-    return ([model], f"Opened {data}.")
+    return ([model], f"Opened {full_name}.")
+
+
+def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
+
+    # Work around ChimeraX
+    if fs:
+        data = f"{fs}://" + data
+
+    # The initial store to get sizes and units
+    root = zarr.storage.FSStore(
+        f"{data}", key_separator="/", mode="r", dimension_separator="/"
+    )
+
+    name = os.path.basename(data)
+
+    return _open(session, root, scales, full_name=data, name=name)
+
+
+def open_ome_zarr_from_fs(
+    session,
+    fs: AbstractFileSystem,
+    path: str,
+    scales: List[int] = None,
+):
+    root = zarr.storage.FSStore(
+        path, key_separator="/", mode="r", dimension_separator="/", fs=fs
+    )
+    return _open(session, root, scales, full_name=path, name=os.path.basename(path))
 
 
 # def fetch_tomogram(session, identifier: str, ignore_cache: bool = False, **kw):
