@@ -53,7 +53,7 @@ class ZarrGrid(GridData):
             ijk_size = ijk_size[::-1]
             ijk_size = [ijk_origin[i] + ijk_size[i] for i in range(3)]
 
-        #print(f"Reading {ijk_origin} {ijk_size} {ijk_step}")
+        # print(f"Reading {ijk_origin} {ijk_size} {ijk_step}")
 
         m = self.dask_data[
             ijk_origin[0] : ijk_size[0] : ijk_step[0],
@@ -61,8 +61,8 @@ class ZarrGrid(GridData):
             ijk_origin[2] : ijk_size[2] : ijk_step[2],
         ]
 
-        #print(f"Read {m.shape} {m.dtype}")
-        #print(type(m))
+        # print(f"Read {m.shape} {m.dtype}")
+        # print(type(m))
 
         from numpy import float16, float32
 

@@ -62,9 +62,9 @@ def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
 
     # Get pixelsizes in Angstrom from unit and scale transformations
     ufac = get_unit_factor(attrs)
-    #print(f"ufac: {ufac}")
+    # print(f"ufac: {ufac}")
     sizes = get_pixelsize(attrs)
-    #print(f"sizes: {sizes}")
+    # print(f"sizes: {sizes}")
     sizes = [(ufac[0] * s[0], ufac[1] * s[1], ufac[2] * s[2]) for s in sizes]
 
     # The cached store, group and arrays
@@ -76,16 +76,16 @@ def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
     arrays_cached = list(group_cached.arrays())
 
     # If no scales requested, load lowest by default
-    #print(f"num arrays: {len(arrays_cached)}")
+    # print(f"num arrays: {len(arrays_cached)}")
     if not scales:
         scales = [len(arrays_cached) - 1]
 
-    #print(f"scales: {scales}")
-    #print(sizes)
+    # print(f"scales: {scales}")
+    # print(sizes)
 
     for scale in scales:
         name, array = arrays_cached[scale]
-        #print(type(array))
+        # print(type(array))
         # agd = ArrayGridData(array, step=sizes[scale], name=name)#f"{os.path.basename(data)}/{name}")
         dgd = ZarrGrid(array, step=sizes[scale], name=name)
         ijk_min = (0, 0, dgd.size[2] // 2)
