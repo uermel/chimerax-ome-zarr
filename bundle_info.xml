@@ -1,0 +1,52 @@
+<BundleInfo name="ChimeraX-OME-Zarr"
+	    version="0.1" package="chimerax.ome_zarr"
+  	    minSessionVersion="1" maxSessionVersion="1">
+
+  <!-- Additional information about bundle source -->
+  <Author>Chan Zuckerberg Institute for Advanced Biological imaging</Author>
+  <Email>uermel@czii.org</Email>
+  <URL>https://www.czii.org/</URL>
+
+  <!-- Synopsis is a one-line description
+       Description is a full multi-line description -->
+  <Synopsis>Open OME-Zarr files.</Synopsis>
+  <Description>
+    <p>Open OME-Zarr files.</p>
+  </Description>
+
+  <!-- Categories is a list where this bundle should appear -->
+  <Categories>
+    <Category name="General"/>
+  </Categories>
+
+  <!-- Dependencies on other ChimeraX/Python packages -->
+  <Dependencies>
+    <Dependency name="ChimeraX-Core" version="~=1.7.1"/>
+    <Dependency name="ndjson"/>
+    <Dependency name="ome_zarr"/>
+    <Dependency name="dask"/>
+    <Dependency name="zarr"/>
+  </Dependencies>
+
+  <Providers manager="data formats">
+    <Provider name="OME-Zarr"
+              suffixes=".zarr"
+              category="volume"
+              nicknames="zarr"
+              reference_url="https://ngff.openmicroscopy.org/latest/"
+              synopsis="Next-generation file format (NGFF) specifications for storing bioimaging data in the cloud."/>
+  </Providers>
+
+  <Providers manager="open command">
+    <Provider name="OME-Zarr" want_path="true" check_path="false"/>
+  </Providers>
+
+
+
+  <Classifiers>
+    <!-- Development Status should be compatible with bundle version number -->
+    <PythonClassifier>Development Status :: 3 - Alpha</PythonClassifier>
+    <PythonClassifier>License :: Freeware</PythonClassifier>
+  </Classifiers>
+
+</BundleInfo>
