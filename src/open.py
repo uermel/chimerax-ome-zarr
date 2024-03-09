@@ -80,9 +80,9 @@ def _open(
         dgd = ZarrGrid(array, step=sizes[scale], name=name)
         ijk_min = (0, 0, dgd.size[2] // 2)
         ijk_max = (
-            dgd.size[0] // initial_step[0],
-            dgd.size[1] // initial_step[1],
-            dgd.size[2] // 2 // initial_step[2],
+            dgd.size[0],
+            dgd.size[1],
+            dgd.size[2] // 2,
         )
         ijk_step = initial_step
         vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))

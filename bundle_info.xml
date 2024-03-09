@@ -41,12 +41,20 @@
     <Provider name="OME-Zarr" want_path="true" check_path="false"/>
   </Providers>
 
-
-
   <Classifiers>
     <!-- Development Status should be compatible with bundle version number -->
     <PythonClassifier>Development Status :: 3 - Alpha</PythonClassifier>
     <PythonClassifier>License :: Freeware</PythonClassifier>
+
+    <ChimeraXClassifier>ChimeraX :: Command :: envfile set :: General ::
+      Set a script to source when starting the tool.</ChimeraXClassifier>
+
+    <ChimeraXClassifier>ChimeraX :: Command :: envfile get :: General ::
+      Get the script that is sourcecd when starting the tool.</ChimeraXClassifier>
+
+    <ChimeraXClassifier>ChimeraX :: Command :: envfile clear :: General ::
+      Reset the script that is sourcecd when starting the tool.</ChimeraXClassifier>
+
   </Classifiers>
 
 </BundleInfo>
