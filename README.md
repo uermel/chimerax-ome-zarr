@@ -4,7 +4,7 @@ OME-Zarr support for ChimeraX. Currently only supports **opening** local or remo
 ## Installation
 
 1. Install [ChimeraX](https://www.cgl.ucsf.edu/chimerax/download.html)
-2. Download the most recent build from the [releases page.]()
+2. Download the most recent build from the [releases page.](https://github.com/czimaginginstitute/chimerax-ome-zarr/releases)
 3. Run the following command in the ChimeraX command prompt to install the plugin:
 ```
 toolshed install /path/to/ChimeraX_OME_Zarr-0.1-py3-none-any.whl
