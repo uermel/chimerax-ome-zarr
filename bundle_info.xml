@@ -1,5 +1,5 @@
 <BundleInfo name="ChimeraX-OME-Zarr"
-	    version="0.1" package="chimerax.ome_zarr"
+	    version="0.2" package="chimerax.ome_zarr"
   	    minSessionVersion="1" maxSessionVersion="1">
 
   <!-- Additional information about bundle source -->
