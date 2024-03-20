@@ -10,7 +10,7 @@ OME-Zarr support for ChimeraX. Currently only supports **opening** local or remo
 toolshed install /path/to/ChimeraX_OME_Zarr-0.1-py3-none-any.whl
 ```
 4. Restart ChimeraX
-5. Optional: Use the `envfile set` command to provide a file that can be sourced to set environment variables necessary for authentication with the storage backend. 
+5. Optional: If using MacOS, any environment variables necessary for AWS authentication should be set in the shell that runs ChimeraX, or set in /Users/$USERNAME$/.zprofile
 
 
 ## Usage

@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from typing import Dict
 
@@ -26,3 +27,8 @@ def env_from_sourcing(file_to_source_path, include_unexported_variables=False):
 def set_env(values: Dict[str, str]):
     for k, v in values.items():
         os.environ[k] = v
+
+
+def env_if_mac():
+    if sys.platform == "darwin":
+        set_env(env_from_sourcing(f"{os.path.expanduser('~')}/.zprofile"))
