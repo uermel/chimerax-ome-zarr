@@ -19,7 +19,7 @@ This plugin integrates with the ChimeraX `open`-command. Currently, the smallest
 Users can specify the scale to load using the `scales` flag and a comma-separated list of scale indeces. The remote store
 type can be specified using the `fs` flag. Currently, only `s3` is supported.
 
-Examples:
+### Examples:
 
 **Open a local zarr file**
 ```
@@ -36,3 +36,16 @@ open bucket-name/path/to/file.zarr format zarr fs s3
 ```
 open bucket-name/path/to/file.zarr format zarr fs s3 scales 0,1,2
 ```
+
+### Zarr store backend authentication
+
+Authentication to the Zarr storage backend (e.g. S3) may fail if ChimeraX is launched without the appropriate environment variables set. To prevent, launch
+ChimeraX from terminal or use the command `envfile set` to provide a file that can be sourced to provide the correct environment. 
+
+For example, on MacOS using zsh:
+```
+envfile set /Users/example.user/.zprofile
+```
+
+The location of this file is stored as a ChimeraX setting and can be printed using `envfile get` or cleared using `envfile clear`.
+
