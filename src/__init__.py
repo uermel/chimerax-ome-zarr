@@ -7,9 +7,7 @@ class _MyAPI(BundleAPI):
     api_version = 1
 
     @staticmethod
-    def run_provider(session, name, mgr):
-        print(f"run_provider: {name}, {mgr}")
-
+    def run_provider(session, name, mgr, **kw):
         if mgr == session.open_command:
             if "OME-Zarr" in name:
                 from .info import OMEZarrOpenerInfo
