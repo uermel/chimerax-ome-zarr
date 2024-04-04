@@ -16,6 +16,8 @@ OME-Zarr v0.4 support for ChimeraX.
 - 2D data
 - multi-image files
 
+Contributions are welcome.
+
 ## Installation
 
 1. Install [ChimeraX](https://www.cgl.ucsf.edu/chimerax/download.html)
