@@ -10,6 +10,10 @@ OME-Zarr v0.4 support for ChimeraX.
 - Labels data
 - Channel axes
 - Time axes
+- non-integer scaling
+- translation transformations
+- 2D data
+- multi-image files
 
 ## Installation
 
