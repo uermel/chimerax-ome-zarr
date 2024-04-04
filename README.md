@@ -1,5 +1,5 @@
 # chimerax-ome-zarr
-Plugin providing OME-Zarr v0.4 support for ChimeraX.
+Plugin providing (limited) OME-Zarr v0.4 support for ChimeraX.
 
 **Currently supported:**
 - xyz-order multiscale volumes.
