@@ -21,7 +21,7 @@ Contributions are welcome.
 ## Installation
 
 1. Install [ChimeraX](https://www.cgl.ucsf.edu/chimerax/download.html)
-2. Download the most recent build from the [releases page.](https://github.com/czimaginginstitute/chimerax-ome-zarr/releases)
+2. Download the most recent build from the [releases page.](https://github.com/uermel/chimerax-ome-zarr/releases)
 3. Run the following command in the ChimeraX command prompt to install the plugin:
 ```
 toolshed install /path/to/ChimeraX_OME_Zarr-0.4-py3-none-any.whl
