@@ -24,7 +24,7 @@ Contributions are welcome.
 2. Download the most recent build from the [releases page.](https://github.com/uermel/chimerax-ome-zarr/releases)
 3. Run the following command in the ChimeraX command prompt to install the plugin:
 ```
-toolshed install /path/to/ChimeraX_OME_Zarr-0.4.1-py3-none-any.whl
+toolshed install /path/to/ChimeraX_OME_Zarr-0.4.2-py3-none-any.whl
 ```
 4. Restart ChimeraX
 
