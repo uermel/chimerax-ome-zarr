@@ -2,6 +2,7 @@
 OME-Zarr v0.4 support for ChimeraX.
 
 **Currently supported:**
+- xyz-order multiscale volumes.
 - Opening local or remote zarr files
 - Loading specific multiscales as volumes (streamed on demand and cached in memory)
 - Loading all multiscales as a single Volume, accessible using Chimerax's `step` setting
