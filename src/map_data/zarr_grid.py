@@ -147,9 +147,6 @@ class ZarrModel(Model):
         if not all(a.type == "space" for a in mlt.axes):
             raise ValueError("Unknown space axis.")
 
-        print(mlt)
-        print(mlt.datasets)
-
         self.avail_scales = [d.path for d in mlt.datasets]
 
         if scales is not None:
@@ -181,8 +178,6 @@ class ZarrModel(Model):
         arrays_datasets_sizes = list(zip(arrays_cached, mlt.datasets, sizes, strict=True))
 
         # Sort arrays by size for quicker loading
-        print(arrays_datasets_sizes)
-        print([x[0].nbytes for x in arrays_datasets_sizes])
         self.arrays_datasets_sizes = sorted(arrays_datasets_sizes, key=lambda x: x[0].nbytes, reverse=False)
 
         # If no scales requested, load all scales async
@@ -342,7 +337,6 @@ class WrappedZarrGrid(GridData):
         # Relative transformation between grids
         self._rel_step_sizes: List[Tuple[int, ...]] = []
         base_step = steps[-1]
-        print(f"base_step: {base_step}")
         for s in steps:
             relstep = (s[0] / base_step[0], s[1] / base_step[1], s[2] / base_step[2])
 
