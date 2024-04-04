@@ -21,6 +21,18 @@ class _MyAPI(BundleAPI):
 
                 return NGFFFetcherInfo()
 
+    @staticmethod
+    def get_class(name):
+        from .map_data.zarr_grid import WrappedZarrGrid, ZarrGrid, ZarrModel
+
+        clsdict = {
+            "ZarrModel": ZarrModel,
+            "WrappedZarrGrid": WrappedZarrGrid,
+            "ZarrGrid": ZarrGrid,
+        }
+
+        return clsdict[name]
+
 
 # Create the ``bundle_api`` object that ChimeraX expects.
 bundle_api = _MyAPI()
