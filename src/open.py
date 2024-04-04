@@ -1,124 +1,77 @@
+# vim: set expandtab shiftwidth=4 softtabstop=4:
+
 import os
-import zarr
-import zarr.attrs
-from zarr.storage import FSStore
-from fsspec import AbstractFileSystem
-
-from chimerax.core.models import Model
-from chimerax.map.volume import Volume, show_volume_dialog
-
-
 from typing import List, Tuple
 
-from .map_data.zarr_grid import ZarrGrid
+import fsspec
+import zarr
+import zarr.attrs
+from chimerax.core.models import Model
+from chimerax.core.session import Session
+from chimerax.map.volume import show_volume_dialog
+from fsspec import AbstractFileSystem
 
-UNITFACTOR = {
-    "angstrom": 1.0,
-    "nm": 10.0,
-    "um": 10000.0,
-    "mm": 10000000.0,
-}
-
-
-def get_unit_factor(zattrs: zarr.attrs.Attributes) -> Tuple[float, float, float]:
-
-    ms = zattrs["multiscales"][0]
-    zunit = UNITFACTOR[ms["axes"][0].get("unit", "angstrom")]
-    yunit = UNITFACTOR[ms["axes"][1].get("unit", "angstrom")]
-    xunit = UNITFACTOR[ms["axes"][2].get("unit", "angstrom")]
-
-    return (zunit, yunit, xunit)
-
-
-def get_pixelsize(zattrs: zarr.attrs.Attributes) -> List[Tuple[float, float, float]]:
-    sizes = []
-
-    datasets = zattrs["multiscales"][0]["datasets"]
-    for ds in datasets:
-        zs = ds["coordinateTransformations"][0]["scale"][0]
-        ys = ds["coordinateTransformations"][0]["scale"][1]
-        xs = ds["coordinateTransformations"][0]["scale"][2]
-
-        sizes.append((zs, ys, xs))
-
-    return sizes
+from .map_data.zarr_grid import ZarrModel
 
 
 def _open(
-    session,
+    session: Session,
     root: zarr.storage,
-    scales: List[int],
+    scales: List[str],
     full_name: str = "",
     name: str = "",
     initial_step: Tuple[int, int, int] = (4, 4, 4),
 ) -> Tuple[List[Model], str]:
+    if scales is not None:
+        initial_step = (1, 1, 1)
 
-    model = Model(name, session)
-
-    group = zarr.open(root, mode="r")
-    attrs = group.attrs
-
-    # Get pixelsizes in Angstrom from unit and scale transformations
-    ufac = get_unit_factor(attrs)
-    sizes = get_pixelsize(attrs)
-    sizes = [(ufac[0] * s[0], ufac[1] * s[1], ufac[2] * s[2]) for s in sizes]
-
-    # The cached store, group and arrays
-    root_cached = zarr.LRUStoreCache(
-        root,
-        max_size=None,
-    )
-    group_cached = zarr.open(root_cached, mode="r")
-    arrays_cached = list(group_cached.arrays())
-
-    # If no scales requested, load lowest by default
-    if not scales:
-        scales = [len(arrays_cached) - 1]
-
-    for scale in scales:
-        aname, array = arrays_cached[scale]
-        dgd = ZarrGrid(array, step=sizes[scale], name=f"{name} - {aname}")
-        ijk_min = (0, 0, dgd.size[2] // 2)
-        ijk_max = (
-            dgd.size[0],
-            dgd.size[1],
-            dgd.size[2] // 2,
-        )
-        ijk_step = initial_step
-        vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))
-        vol.set_display_style("image")
-        model.add([vol])
+    model = ZarrModel(name, session, root, scales, initial_step)
 
     show_volume_dialog(session)
     return [model], f"Opened {full_name}."
 
 
-def open_ome_zarr(session, data: str, scales: List[int] = None, fs: str = ""):
+def open_ome_zarr(
+    session,
+    data: List[str],
+    scales: List[str] = None,
+) -> Tuple[List[Model], str]:
+    """
+    Open OME-Zarr files from a list of URLs. Will return one ZarrModel per URL, which has one or more Volumes as
+    children.
 
-    # Work around ChimeraX
-    if fs:
-        data = f"{fs}://" + data
+    :param session: ChimeraX session
+    :param data: the list of URLs to open
+    :param scales: if provided, each scale will be opened as a separate child volume. If not provided, the multiscales
+    will be opened as a single volume, accessible through the step setting in the Volume Viewer or the volume command.
+    :return: List of opened models and a string message describing the operation
+    """
+    retm = []
+    rets = []
 
-    # The initial store to get sizes and units
-    root = zarr.storage.FSStore(
-        f"{data}", key_separator="/", mode="r", dimension_separator="/"
-    )
+    for d in data:
+        fs, d = fsspec.core.url_to_fs(d)
 
-    name = os.path.basename(data)
+        # The initial store to get sizes and units
+        root = zarr.storage.FSStore(d, key_separator="/", mode="r", dimension_separator="/", fs=fs)
+        name = os.path.basename(d)
 
-    return _open(session, root, scales, full_name=data, name=name)
+        m, s = _open(session, root, scales, full_name=d, name=name)
+
+        retm += m
+        rets.append(s)
+
+    return retm, "\n".join(rets)
 
 
 def open_ome_zarr_from_fs(
     session,
     fs: AbstractFileSystem,
     path: str,
-    scales: List[int] = None,
+    scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
-):
-    root = zarr.storage.FSStore(
-        path, key_separator="/", mode="r", dimension_separator="/", fs=fs
-    )
+) -> Tuple[List[Model], str]:
+    root = zarr.storage.FSStore(path, key_separator="/", mode="r", dimension_separator="/", fs=fs)
     return _open(
         session,
         root,

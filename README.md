@@ -1,5 +1,15 @@
 # chimerax-ome-zarr
-OME-Zarr support for ChimeraX. Currently only supports **opening** local or remote Zarr files, not saving.
+OME-Zarr v0.4 support for ChimeraX.
+
+**Currently supported:**
+- Opening local or remote zarr files
+- Loading specific multiscales as volumes (streamed on demand and cached in memory)
+- Loading all multiscales as a single Volume, accessible using Chimerax's `step` setting
+
+**Currently not supported:**
+- Labels data
+- Channel axes
+- Time axes
 
 ## Installation
 
@@ -7,45 +17,46 @@ OME-Zarr support for ChimeraX. Currently only supports **opening** local or remo
 2. Download the most recent build from the [releases page.](https://github.com/czimaginginstitute/chimerax-ome-zarr/releases)
 3. Run the following command in the ChimeraX command prompt to install the plugin:
 ```
-toolshed install /path/to/ChimeraX_OME_Zarr-0.1-py3-none-any.whl
+toolshed install /path/to/ChimeraX_OME_Zarr-0.4-py3-none-any.whl
 ```
 4. Restart ChimeraX
-5. Optional: If using MacOS, any environment variables necessary for AWS authentication should be set in the shell that runs ChimeraX, or set in /Users/$USERNAME$/.zprofile
 
 
 ## Usage
 
-This plugin integrates with the ChimeraX `open`-command. Currently, the smallest scale is loaded by default. 
-Users can specify the scale to load using the `scales` flag and a comma-separated list of scale indeces. The remote store
-type can be specified using the `fs` flag. Currently, only `s3` is supported.
+This plugin integrates with the ChimeraX `open`-command.
 
-### Examples:
-
-**Open a local zarr file**
+**To open a local OME-Zarr file:**
 ```
-open /path/to/file.zarr format zarr
+open /path/to/file.zarr
 ```
 
-**Open a zarr file from S3** (will use default AWS profile, set environment variable `AWS_PROFILE` in the shell that runs
-ChimeraX to change)
+**To open a remote OME-Zarr file:**
 ```
-open bucket-name/path/to/file.zarr format zarr fs s3
+open ngff:s3://bucket-name/path/to/file.zarr
 ```
 
-**Open a zarr file from S3, load 3 scales** 
+**To open a remote OME-Zarr file and load specific scales:**
 ```
-open bucket-name/path/to/file.zarr format zarr fs s3 scales 0,1,2
+open ngff:s3://bucket-name/path/to/file.zarr scales 1,2
 ```
+
+**NOTE:** in order to open files from remote locations other than S3, you may have to install additional python
+packages (e.g. `smbprotocol` for SAMBA shares).
+
 
 ### Zarr store backend authentication
 
-Authentication to the Zarr storage backend (e.g. S3) may fail if ChimeraX is launched without the appropriate environment variables set. To prevent, launch
-ChimeraX from terminal or use the command `envfile set` to provide a file that can be sourced to provide the correct environment. 
+Authentication to the Zarr storage backend (e.g. S3) may fail if ChimeraX is launched without the appropriate environment
+variables present.
 
-For example, on MacOS using zsh:
+#### MacOS
+To prevent auth problems, make sure necessary environment variables are set in `~/.zprofile`. This plugin will attempt to
+set these variables automatically if they are not present.
+
+
+Alternatively, launch ChimeraX from a shell that has the necessary environment variables set. Typically the executable
+should exist in a location similar to:
 ```
-envfile set /Users/example.user/.zprofile
+/Applications/ChimeraX-1.7.1.app/Contents/bin/ChimeraX
 ```
-
-The location of this file is stored as a ChimeraX setting and can be printed using `envfile get` or cleared using `envfile clear`.
-

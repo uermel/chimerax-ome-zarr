@@ -1,0 +1,106 @@
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
+
+[project]
+name = "ChimeraX-OME-Zarr"
+version = "0.3"
+dynamic = ["classifiers", "requires-python"]
+dependencies = [
+    "ChimeraX-Core~=1.7.1",
+    "ome_zarr",
+    "dask",
+    "zarr",
+    "fsspec",
+    "s3fs",
+    "smbprotocol",
+]
+authors = [
+  {name = "Utz H. Ermel", email = "utz@ermel.me"},
+]
+description = "Open OME-Zarr files in ChimeraX."
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = ["ome-zarr", "bioimaging", "ngff", "ome", "zarr", "multiscale"]
+
+[project.urls]
+Repository = "https://github.com/uermel/chimerax-ome-zarr.git"
+Issues = "https://github.com/uermel/chimerax-ome-zarr/issues"
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "pre-commit",
+    "ruff",
+]
+
+[chimerax]
+category = "Volume Data"
+package = "chimerax.ome_zarr"
+min-session-version="1"
+max-session-version="1"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License"
+]
+
+[chimerax.data-format."OME-Zarr"]
+category = "Volume Data"
+nicknames = ["ome-zarr", "omezarr"]
+suffixes = [".zarr"]
+reference-url="https://ngff.openmicroscopy.org/latest/"
+synopsis="Next-generation file format (NGFF) specifications for storing bioimaging data in the cloud."
+
+[[chimerax.data-format."OME-Zarr".open]]
+want-path = true
+check-path = false
+is-default = true
+type = "open"
+
+[[chimerax.data-format."OME-Zarr".open]]
+name = "ngff"
+type = "fetch"
+
+[tool.black]
+line-length = 120
+target_version = ['py311']
+
+[tool.ruff]
+select = [
+    "E", "W",  # pycodestyle
+    "F",  # pyflakes
+    "B",  # bugbear
+    "I",  # isort
+    "N",  # pep8-naming
+    "ASYNC",  # async
+    "COM",  # commas
+    "C4",  # comprehensions
+    "DTZ",  # datetimez
+    "ISC",  # implicit-str-concat
+    "G",  # logging-format
+    "T20",  # print
+    "SIM",  # simplify
+]
+ignore = [
+    "N815",  # Variable in class scope should not be mixedCase
+    "N802",  # Function name should be lowercase
+    "N999",  # Invalid module name
+    "E501",  # line too long
+    "C408",  # rewrite empty built-ins as literals
+    "T201",  # print statements.
+    "DTZ007", # Datetime objects without timezones.
+    "DTZ005", # More datetimes without timezones.
+]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.isort]
+known-first-party =["common"]
+
+[tool.ruff.flake8-quotes]
+docstring-quotes = "double"
+
+[tool.mypy]
+show_error_codes = true
+ignore_missing_imports = true
+warn_unreachable = true
+strict = true
