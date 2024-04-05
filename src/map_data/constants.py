@@ -1,3 +1,5 @@
+# vim: set expandtab shiftwidth=4 softtabstop=4:
+
 UNITFACTOR = {
     "angstrom": 1.0,
     "attometer": 1e-8,
