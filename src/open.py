@@ -70,8 +70,15 @@ def open_ome_zarr_from_fs(
     path: str,
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
+    log: bool = True,
 ) -> Tuple[List[Model], str]:
     root = zarr.storage.FSStore(path, key_separator="/", mode="r", dimension_separator="/", fs=fs)
+
+    if log:
+        from chimerax.core.commands import log_equivalent_command
+
+        log_equivalent_command(session, f"open ngff:{fs.protocol}://{path}")
+
     return _open(
         session,
         root,
