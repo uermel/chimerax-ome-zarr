@@ -77,7 +77,8 @@ def open_ome_zarr_from_fs(
     if log:
         from chimerax.core.commands import log_equivalent_command
 
-        log_equivalent_command(session, f"open ngff:{fs.protocol}://{path}")
+        proto = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
+        log_equivalent_command(session, f"open ngff:{proto}://{path}")
 
     return _open(
         session,

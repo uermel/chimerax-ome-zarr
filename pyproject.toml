@@ -35,7 +35,8 @@ dev = [
 
 [chimerax]
 category = "Volume Data"
-package = "chimerax.ome_zarr"
+module-name-override = "ome_zarr"
+package = "chimerax.ome-zarr"
 min-session-version="1"
 max-session-version="1"
 classifiers = [
