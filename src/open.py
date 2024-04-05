@@ -88,3 +88,20 @@ def open_ome_zarr_from_fs(
         name=os.path.basename(path),
         initial_step=initial_step,
     )
+
+
+def open_ome_zarr_from_store(
+    session,
+    root: zarr.storage,
+    name: str,
+    scales: List[str] = None,
+    initial_step: Tuple[int, int, int] = (4, 4, 4),
+) -> Tuple[List[Model], str]:
+    return _open(
+        session,
+        root,
+        scales,
+        full_name=name,
+        name=name,
+        initial_step=initial_step,
+    )
