@@ -1,0 +1,64 @@
+<html>
+  <head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <link rel="stylesheet" type="text/css" href="../userdocs.css">
+    <title>Index</title>
+    <style>
+    div.expanded {visibility:visible; display: block}
+    div.collapsed {visibility:hidden; display: none}
+    </style>
+    <script>
+      function toggle(id, image) {
+        div = document.getElementById(id);
+        if (div.className == "expanded") {
+          div.className = "collapsed";
+          image.src="../../icons/triangler.png";
+        } else {
+          div.className = "expanded";
+          image.src="../../icons/triangled.png";
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <h2> <a name="top"></a>
+      ChimeraX OME-Zarr plugin </h2>
+    <p><a><b><a href="https://ngff.openmicroscopy.org/latest/">OME-Zarr</a></b> is a next generation file format
+        specification for storing bioimaging data on the cloud.</a></p>
+
+    <p><a>This plugin provides limited support for OME-Zarr files in ChimeraX.</a></p>
+
+    <p><a><b>Currently supported:</b></a></p>
+    <ul>
+        <li>ZYX-order multiscale volumes.</li>
+        <li>Opening local or remote zarr files.</li>
+        <li>Loading specific multiscales as volumes (streamed on demand and cached in memory).</li>
+        <li>Loading all multiscales as a single Volume, accessible using Chimerax's <b>step setting</b>.</li>
+    </ul>
+
+    <p><a><b>Currently not (yet) supported: </b></a></p>
+    <ul>
+        <li>Labels data.</li>
+        <li>Channel axes.</li>
+        <li>Time axes.</li>
+        <li>non-integer scaling.</li>
+        <li>translation transformations.</li>
+        <li>2D data.</li>
+        <li>multi-image files.</li>
+    </ul>
+
+    <ul class="none" style="list-style: none;">
+      <li><a name="Commands" href="#commands"></a> <img onclick="toggle('commands', this);"
+          src="../../icons/triangled.png" width="10" height="10/">&nbsp;<b>Commands</b></li>
+      <div id="commands" class="expanded">
+        <ul>
+          <li><b><a href="commands/open.html">open</a></b>
+            &nbsp;– open local or remote OME-Zarr files</li>
+          <b></b>
+        </ul>
+      </div>
+    </ul>
+    <hr>
+    <address>Utz H. Ermel / April 2024</address>
+  </body>
+</html>
