@@ -20,6 +20,18 @@ Contributions are welcome.
 
 ## Installation
 
+### From the ChimeraX toolshed
+
+Now available on the ChimeraX toolshed! To download and install run this in the ChimeraX command prompt:
+
+```
+toolshed reload available
+toolshed install ome-zarr
+```
+
+
+### From GitHub release
+
 1. Install [ChimeraX](https://www.cgl.ucsf.edu/chimerax/download.html)
 2. Download the most recent build from the [releases page.](https://github.com/uermel/chimerax-ome-zarr/releases)
 3. Run the following command in the ChimeraX command prompt to install the plugin:
