@@ -3,10 +3,10 @@ requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
 
 [project]
 name = "ChimeraX-OME-Zarr"
-version = "0.5.2"
+version = "0.5.3"
 dynamic = ["classifiers", "requires-python"]
 dependencies = [
-    "ChimeraX-Core~=1.7.1",
+    "ChimeraX-Core>=1.7",
     "ome_zarr",
     "dask",
     "zarr",
