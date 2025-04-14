@@ -304,9 +304,12 @@ class ZarrGrid(GridData):
             ijk_origin[2] : ijk_size[2] : ijk_step[2],
         ]
 
-        from numpy import float16, float32
+        from numpy import float16, float32, uint64
 
         if m.dtype == float16:
+            m = m.astype(float32)
+
+        if m.dtype == uint64:
             m = m.astype(float32)
 
         return m
@@ -340,13 +343,13 @@ class WrappedZarrGrid(GridData):
         for s in steps:
             relstep = (s[0] / base_step[0], s[1] / base_step[1], s[2] / base_step[2])
 
-            if not np.allclose(relstep, relstep[0]):
-                raise NotImplementedError(
-                    f"""Anisotropically scaled input data is not supported. Finest step: {base_step}, current step: {s},
-                    relative step: {relstep}""",
-                )
+            # if not np.allclose(relstep, relstep[0]):
+            #     raise NotImplementedError(
+            #         f"""Anisotropically scaled input data is not supported. Finest step: {base_step}, current step: {s},
+            #         relative step: {relstep}""",
+            #     )
 
-            if not np.allclose(relstep, int(relstep[0])):
+            if not np.allclose(relstep, [int(s) for s in relstep]):
                 raise NotImplementedError(
                     f"Non-integer scaling levels are not supported. Relative steps determined: {relstep}",
                 )
