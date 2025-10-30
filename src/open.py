@@ -38,8 +38,9 @@ def _open(
         is_multichannel = len(channel_indices) == len(volumes) and len(set(channel_indices)) > 1
 
         if is_time_series or is_multichannel:
-            # Remove volumes from ZarrModel
-            session.models.close([model])
+            # Remove volumes from ZarrModel without deleting them
+            # (The model was never added to session, so just detach the volumes)
+            model.remove_drawings(volumes, delete=False)
 
             # Create appropriate wrapper model
             if is_time_series and is_multichannel:
