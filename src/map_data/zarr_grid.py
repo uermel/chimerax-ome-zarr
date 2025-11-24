@@ -48,6 +48,39 @@ class Multiscales:
     datasets: List[MultiscaleDataset]
 
 
+@dataclass
+class OmeroChannelWindow:
+    """OMERO channel window (display range) metadata."""
+
+    start: float
+    end: float
+    min: float
+    max: float
+
+
+@dataclass
+class OmeroChannel:
+    """OMERO channel metadata."""
+
+    label: str
+    color: str  # Hex color string like "FFFFFF"
+    active: bool = True
+    coefficient: float = 1.0
+    family: str = "linear"
+    inverted: bool = False
+    window: Optional[OmeroChannelWindow] = None
+
+
+@dataclass
+class OmeroMetadata:
+    """OMERO metadata from OME-Zarr."""
+
+    channels: List[OmeroChannel]
+    version: Optional[str] = None
+    id: Optional[int] = None
+    name: Optional[str] = None
+
+
 def get_unit_factor(ms: Multiscales) -> Tuple[float, float, float]:
     """Get a multiplication factor that converts scaling information from OME-Zarr header to angstrom."""
     zunit = UNITFACTOR.get(ms.axes[0].unit, "angstrom")
@@ -123,6 +156,69 @@ def parse_multiscales(zattrs: zarr.attrs.Attributes) -> Union[Multiscales, None]
         datasets.append(MultiscaleDataset(ds["path"], cts))
 
     return Multiscales(axes, datasets)
+
+
+def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> Tuple[float, float, float, float]:
+    """
+    Convert hex color string to RGBA tuple with values 0-1.
+
+    Args:
+        hex_color: Hex color string like "FFFFFF" or "#FFFFFF"
+        alpha: Alpha value (0-1), default 1.0
+
+    Returns:
+        Tuple of (r, g, b, a) with values 0-1
+    """
+    # Remove # if present
+    hex_color = hex_color.lstrip("#")
+
+    # Convert hex to RGB (0-255)
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+
+    # Normalize to 0-1
+    return (r / 255.0, g / 255.0, b / 255.0, alpha)
+
+
+def parse_omero(zattrs: zarr.attrs.Attributes) -> Optional[OmeroMetadata]:
+    """
+    Parse OMERO metadata from OME-Zarr header.
+
+    Returns None if OMERO metadata is not present.
+    """
+    if "omero" not in zattrs:
+        return None
+
+    omero = zattrs["omero"]
+
+    # Parse channels
+    channels = []
+    if "channels" in omero:
+        for ch in omero["channels"]:
+            # Parse window if present
+            window = None
+            if "window" in ch:
+                window = OmeroChannelWindow(**ch["window"])
+
+            # Create channel with required and optional fields
+            channel = OmeroChannel(
+                label=ch.get("label", ""),
+                color=ch.get("color", "FFFFFF"),
+                active=ch.get("active", True),
+                coefficient=ch.get("coefficient", 1.0),
+                family=ch.get("family", "linear"),
+                inverted=ch.get("inverted", False),
+                window=window,
+            )
+            channels.append(channel)
+
+    return OmeroMetadata(
+        channels=channels,
+        version=omero.get("version"),
+        id=omero.get("id"),
+        name=omero.get("name"),
+    )
 
 
 def parse_labels(zattrs: zarr.attrs.Attributes, session: Session) -> None:
@@ -304,6 +400,10 @@ class ZarrModel(Model):
         # Labels (only to warn about ignoring them for now)
         _ = parse_labels(attrs, session)
 
+        # OMERO metadata (optional)
+        omero = parse_omero(attrs)
+        self.omero = omero
+
         # No multiscales, return
         if mlt is None:
             return
@@ -388,8 +488,30 @@ class ZarrModel(Model):
                         # Adjust rendering limit (see comment below about 16 MVoxel limit)
                         vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
 
-                        # Set initial display: show all channels at t=0, hide others
-                        vol.display = t == 0
+                        # Apply OMERO metadata if available
+                        if omero and has_channel and c < len(omero.channels):
+                            ch_meta = omero.channels[c]
+
+                            # Apply channel label to volume name
+                            if ch_meta.label:
+                                vol_name = f"{name} - {ch_meta.label}"
+                                if has_time:
+                                    vol_name += f" t={t}"
+                                vol.name = vol_name
+
+                            # Apply channel color
+                            try:
+                                rgba = hex_to_rgba(ch_meta.color)
+                                vol.set_parameters(default_rgba=rgba)
+                            except (ValueError, IndexError):
+                                # If color parsing fails, use default
+                                pass
+
+                            # Set initial display based on OMERO active flag
+                            vol.display = t == 0 and ch_meta.active
+                        else:
+                            # Set initial display: show all channels at t=0, hide others
+                            vol.display = t == 0
 
                         volumes.append(vol)
 
@@ -472,8 +594,30 @@ class ZarrModel(Model):
                             # See explanation above about rendering limit
                             vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
 
-                            # Set initial display: show all channels at t=0, hide others
-                            vol.display = t == 0
+                            # Apply OMERO metadata if available
+                            if omero and has_channel and c < len(omero.channels):
+                                ch_meta = omero.channels[c]
+
+                                # Apply channel label to volume name
+                                if ch_meta.label:
+                                    vol_name = f"{name} - {dataset.path} - {ch_meta.label}"
+                                    if has_time:
+                                        vol_name += f" t={t}"
+                                    vol.name = vol_name
+
+                                # Apply channel color
+                                try:
+                                    rgba = hex_to_rgba(ch_meta.color)
+                                    vol.set_parameters(default_rgba=rgba)
+                                except (ValueError, IndexError):
+                                    # If color parsing fails, use default
+                                    pass
+
+                                # Set initial display based on OMERO active flag
+                                vol.display = t == 0 and ch_meta.active
+                            else:
+                                # Set initial display: show all channels at t=0, hide others
+                                vol.display = t == 0
 
                             volumes.append(vol)
 

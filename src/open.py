@@ -38,6 +38,22 @@ def _open(
         is_multichannel = len(channel_indices) == len(volumes) and len(set(channel_indices)) > 1
 
         if is_time_series or is_multichannel:
+            # Force initial rendering before reparenting to prevent KeyError issues
+            # This follows ChimeraX's pattern in volume.py:3724-3727 where update_drawings()
+            # is called to ensure surfaces/images are created before final model setup
+            for v in volumes:
+                if v.display:
+                    v.update_drawings()
+
+            # Clean up volumes from VolumeUpdateManager after rendering completes
+            # This prevents KeyError when volumes are reparented and their display state changes
+            vm = getattr(session, "_volume_update_manager", None)
+            if vm is not None:
+                for v in volumes:
+                    # Use discard() to safely remove from tracking sets
+                    vm._volumes_to_update.discard(v)
+                    vm._displayed_volumes_to_update.discard(v)
+
             # Remove volumes from ZarrModel without deleting them
             # (The model was never added to session, so just detach the volumes)
             model.remove_drawings(volumes, delete=False)
@@ -76,7 +92,6 @@ def _open(
                 from chimerax.map.volume import MapChannelsModel
 
                 model = MapChannelsModel(name, volumes, session)
-                # Show first 3 channels by default (user requested all channels, but let's be conservative)
                 model.show_n_channels(len(volumes))  # Show all channels as requested
 
     show_volume_dialog(session)
