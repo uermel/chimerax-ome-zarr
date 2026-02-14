@@ -48,6 +48,39 @@ class Multiscales:
     datasets: List[MultiscaleDataset]
 
 
+@dataclass
+class OmeroChannelWindow:
+    """OMERO channel window (display range) metadata."""
+
+    start: float
+    end: float
+    min: float
+    max: float
+
+
+@dataclass
+class OmeroChannel:
+    """OMERO channel metadata."""
+
+    label: str
+    color: str  # Hex color string like "FFFFFF"
+    active: bool = True
+    coefficient: float = 1.0
+    family: str = "linear"
+    inverted: bool = False
+    window: Optional[OmeroChannelWindow] = None
+
+
+@dataclass
+class OmeroMetadata:
+    """OMERO metadata from OME-Zarr."""
+
+    channels: List[OmeroChannel]
+    version: Optional[str] = None
+    id: Optional[int] = None
+    name: Optional[str] = None
+
+
 def get_unit_factor(ms: Multiscales) -> Tuple[float, float, float]:
     """Get a multiplication factor that converts scaling information from OME-Zarr header to angstrom."""
     zunit = UNITFACTOR.get(ms.axes[0].unit, "angstrom")
@@ -68,6 +101,38 @@ def get_pixelsize(ms: Multiscales) -> List[Tuple[float, float, float]]:
         xs = ds.coordinateTransformations[0].scale[2]
 
         sizes.append((zs, ys, xs))
+
+    return sizes
+
+
+def get_spatial_axes_indices(axes: List[Axis]) -> List[int]:
+    """Get the indices of spatial axes in the axis list."""
+    return [i for i, a in enumerate(axes) if a.type == "space"]
+
+
+def get_unit_factor_spatial(ms: Multiscales) -> Tuple[float, float, float]:
+    """Get multiplication factor for spatial axes only, converting to angstrom."""
+    spatial_axes = [a for a in ms.axes if a.type == "space"]
+    if len(spatial_axes) != 3:
+        raise ValueError(f"Expected 3 spatial axes, got {len(spatial_axes)}")
+
+    zunit = UNITFACTOR.get(spatial_axes[0].unit, 1.0)
+    yunit = UNITFACTOR.get(spatial_axes[1].unit, 1.0)
+    xunit = UNITFACTOR.get(spatial_axes[2].unit, 1.0)
+
+    return (zunit, yunit, xunit)
+
+
+def get_pixelsize_spatial(ms: Multiscales) -> List[Tuple[float, float, float]]:
+    """Get pixel sizes for spatial dimensions only."""
+    spatial_indices = get_spatial_axes_indices(ms.axes)
+    if len(spatial_indices) != 3:
+        raise ValueError(f"Expected 3 spatial axes, got {len(spatial_indices)}")
+
+    sizes = []
+    for ds in ms.datasets:
+        spatial_scale = tuple(ds.coordinateTransformations[0].scale[i] for i in spatial_indices)
+        sizes.append(spatial_scale)
 
     return sizes
 
@@ -93,6 +158,69 @@ def parse_multiscales(zattrs: zarr.attrs.Attributes) -> Union[Multiscales, None]
     return Multiscales(axes, datasets)
 
 
+def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> Tuple[float, float, float, float]:
+    """
+    Convert hex color string to RGBA tuple with values 0-1.
+
+    Args:
+        hex_color: Hex color string like "FFFFFF" or "#FFFFFF"
+        alpha: Alpha value (0-1), default 1.0
+
+    Returns:
+        Tuple of (r, g, b, a) with values 0-1
+    """
+    # Remove # if present
+    hex_color = hex_color.lstrip("#")
+
+    # Convert hex to RGB (0-255)
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+
+    # Normalize to 0-1
+    return (r / 255.0, g / 255.0, b / 255.0, alpha)
+
+
+def parse_omero(zattrs: zarr.attrs.Attributes) -> Optional[OmeroMetadata]:
+    """
+    Parse OMERO metadata from OME-Zarr header.
+
+    Returns None if OMERO metadata is not present.
+    """
+    if "omero" not in zattrs:
+        return None
+
+    omero = zattrs["omero"]
+
+    # Parse channels
+    channels = []
+    if "channels" in omero:
+        for ch in omero["channels"]:
+            # Parse window if present
+            window = None
+            if "window" in ch:
+                window = OmeroChannelWindow(**ch["window"])
+
+            # Create channel with required and optional fields
+            channel = OmeroChannel(
+                label=ch.get("label", ""),
+                color=ch.get("color", "FFFFFF"),
+                active=ch.get("active", True),
+                coefficient=ch.get("coefficient", 1.0),
+                family=ch.get("family", "linear"),
+                inverted=ch.get("inverted", False),
+                window=window,
+            )
+            channels.append(channel)
+
+    return OmeroMetadata(
+        channels=channels,
+        version=omero.get("version"),
+        id=omero.get("id"),
+        name=omero.get("name"),
+    )
+
+
 def parse_labels(zattrs: zarr.attrs.Attributes, session: Session) -> None:
     """Parse labels metadata from OME-Zarr header."""
     if "labels" not in zattrs:
@@ -100,6 +228,114 @@ def parse_labels(zattrs: zarr.attrs.Attributes, session: Session) -> None:
 
     session.logger.warning("Labels not implemented yet.")
     return None
+
+
+class ZarrGrid3DSlice(GridData):
+    """
+    A GridData object that represents a 3D slice of a 4D or 5D Zarr array.
+    Used for time series and/or multi-channel data where each time point and channel
+    is represented as a separate 3D volume.
+
+    The parent array is assumed to be in OME-Zarr order: (T, C, Z, Y, X) where T and C
+    are optional. This class fixes the T and/or C indices and provides a 3D view of the
+    spatial dimensions (Z, Y, X).
+    """
+
+    def __init__(
+        self,
+        array: Array,
+        time_index: Optional[int] = None,
+        channel_index: Optional[int] = None,
+        origin: Tuple[float, float, float] = (0, 0, 0),
+        step: Tuple[float, float, float] = (1, 1, 1),
+        file_type: str = "zarr",
+        path: str = "",
+        name: str = "",
+    ):
+        self.data = array
+        self.time_index = time_index
+        self.channel_index = channel_index
+
+        # Determine how many leading dimensions are time/channel
+        n_leading_dims = 0
+        if time_index is not None:
+            n_leading_dims += 1
+        if channel_index is not None:
+            n_leading_dims += 1
+
+        # Extract spatial shape from the last 3 dimensions (ZYX in OME-Zarr)
+        # and reverse to XYZ for ChimeraX
+        spatial_shape = array.shape[-3:][::-1]
+        origin = origin[::-1]
+        step = step[::-1]
+
+        GridData.__init__(
+            self,
+            spatial_shape,
+            self.data.dtype,
+            origin,
+            step,
+            path=path,
+            file_type=file_type,
+            name=name,
+        )
+
+    def read_matrix(
+        self,
+        ijk_origin: Tuple[int, ...] = (0, 0, 0),
+        ijk_size: Tuple[int, ...] = None,
+        ijk_step: Tuple[int, ...] = (1, 1, 1),
+        progress: Any = None,
+    ):
+        # Maximum spatial size
+        sz = self.size[::-1]  # XYZ to ZYX
+
+        # Limit origin to an index inside the grid
+        ijk_origin = ijk_origin[::-1]  # XYZ to ZYX
+        ijk_origin = [min(sz[i] - 1, ijk_origin[i]) for i in range(3)]
+
+        # Invert step
+        ijk_step = ijk_step[::-1]  # XYZ to ZYX
+
+        if ijk_size is None:
+            ijk_size = sz
+        else:
+            ijk_size = ijk_size[::-1]  # XYZ to ZYX
+            # Limit the max coord to the grid size
+            ijk_size = [min(sz[i], ijk_origin[i] + ijk_size[i]) for i in range(3)]
+
+        # Build the slice indices: (time, channel, z, y, x)
+        slices = []
+
+        # Add fixed time index if present
+        if self.time_index is not None:
+            slices.append(self.time_index)
+
+        # Add fixed channel index if present
+        if self.channel_index is not None:
+            slices.append(self.channel_index)
+
+        # Add spatial slices (ZYX)
+        slices.extend(
+            [
+                slice(ijk_origin[0], ijk_size[0], ijk_step[0]),
+                slice(ijk_origin[1], ijk_size[1], ijk_step[1]),
+                slice(ijk_origin[2], ijk_size[2], ijk_step[2]),
+            ],
+        )
+
+        m = self.data[tuple(slices)]
+
+        # Handle type conversions
+        from numpy import float16, float32, uint64
+
+        if m.dtype == float16:
+            m = m.astype(float32)
+
+        if m.dtype == uint64:
+            m = m.astype(float32)
+
+        return m
 
 
 class ZarrModel(Model):
@@ -138,14 +374,21 @@ class ZarrModel(Model):
         # Multiscales
         mlt = parse_multiscales(attrs)
 
-        if "channel" in [a.type for a in mlt.axes]:
-            raise NotImplementedError("Channel axis not supported yet.")
+        # Detect time and channel axes
+        axes_types = [a.type for a in mlt.axes]
+        has_time = "time" in axes_types
+        has_channel = "channel" in axes_types
 
-        if "time" in [a.type for a in mlt.axes]:
-            raise NotImplementedError("Time axis not supported yet.")
+        # Validate that we have exactly 3 spatial axes
+        spatial_axes = [a for a in mlt.axes if a.type == "space"]
+        if len(spatial_axes) != 3:
+            raise ValueError(f"Expected 3 spatial axes, got {len(spatial_axes)}")
 
-        if not all(a.type == "space" for a in mlt.axes):
-            raise ValueError("Unknown space axis.")
+        # Check for unknown axis types
+        known_types = {"space", "time", "channel"}
+        unknown_types = set(axes_types) - known_types
+        if unknown_types:
+            raise ValueError(f"Unknown axis types: {unknown_types}")
 
         self.avail_scales = [d.path for d in mlt.datasets]
 
@@ -157,13 +400,22 @@ class ZarrModel(Model):
         # Labels (only to warn about ignoring them for now)
         _ = parse_labels(attrs, session)
 
+        # OMERO metadata (optional)
+        omero = parse_omero(attrs)
+        self.omero = omero
+
         # No multiscales, return
         if mlt is None:
             return
 
         # Get pixelsizes in Angstrom from unit and scale transformations
-        ufacs = get_unit_factor(mlt)
-        sizes = get_pixelsize(mlt)
+        # Use spatial-only functions if we have time/channel axes
+        if has_time or has_channel:
+            ufacs = get_unit_factor_spatial(mlt)
+            sizes = get_pixelsize_spatial(mlt)
+        else:
+            ufacs = get_unit_factor(mlt)
+            sizes = get_pixelsize(mlt)
         sizes = [(ufacs[0] * s[0], ufacs[1] * s[1], ufacs[2] * s[2]) for s in sizes]
 
         # The cached store, group and arrays
@@ -185,40 +437,91 @@ class ZarrModel(Model):
             if initial_step is None:
                 initial_step = (4, 4, 4)
 
-            arrays = [a for a, _, _ in self.arrays_datasets_sizes]
-            sizes = [sz for _, _, sz in self.arrays_datasets_sizes]
-            dgd = WrappedZarrGrid(arrays, steps=sizes, name=f"{name}")
+            # Handle time/channel dimensions
+            if has_time or has_channel:
+                # Get time and channel axis indices (OME-Zarr order: TCZYX)
+                time_axis_idx = axes_types.index("time") if has_time else None
+                channel_axis_idx = axes_types.index("channel") if has_channel else None
 
-            # Start slice in the middle of the volume
-            ijk_min = (0, 0, dgd.size[2] // 2)
-            ijk_max = (
-                dgd.size[0],
-                dgd.size[1],
-                dgd.size[2] // 2,
-            )
-            ijk_step = initial_step
-            vol = Volume(session, dgd, region=(ijk_min, ijk_max, ijk_step))
-            vol.set_display_style("image")
+                # Get array with most detail (finest resolution)
+                first_array = self.arrays_datasets_sizes[-1][0]
 
-            # ChimeraX has an upper limit of 16 MVoxel for rendered voxels. This limit is set in the rendering_options
-            # of the Volume. If this is too high, ChimeraX will automatically show the volume at full resolution, i.e.
-            # step = (1,1,1). This is not ideal when we're streaming the data from a remote source on demand.
-            #
-            # To avoid that, we need to make sure that the limit is adjusted according to the current region. This will
-            # prevent moving the slider in the volume viewer to change the step size upon first move.
-            # This is how to do it:
-            vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
-            self.add([vol])
+                # Determine dimensions
+                n_time = first_array.shape[time_axis_idx] if has_time else 1
+                n_channel = first_array.shape[channel_axis_idx] if has_channel else 1
 
-        else:
-            # Load only requested scales
-            if initial_step is None:
-                initial_step = (1, 1, 1)
+                # Create one WrappedZarrGrid per time/channel combination
+                volumes = []
+                for t in range(n_time):
+                    for c in range(n_channel):
+                        # Create grids for this time/channel across all scales
+                        tc_grids = []
+                        tc_sizes = []
+                        for array, _, size in self.arrays_datasets_sizes:
+                            grid = ZarrGrid3DSlice(
+                                array,
+                                time_index=t if has_time else None,
+                                channel_index=c if has_channel else None,
+                                step=size,
+                                name=f"{name} t={t} c={c}",
+                            )
+                            tc_grids.append(grid)
+                            tc_sizes.append(size)
 
-            self.arrays_datasets_sizes = [a for a in self.arrays_datasets_sizes if a[1].path in scales]
+                        # Create WrappedZarrGrid for this time/channel
+                        dgd = WrappedZarrGrid(grids=tc_grids, name=f"{name} t={t} c={c}")
 
-            for array, dataset, size in self.arrays_datasets_sizes:
-                dgd = ZarrGrid(array, step=size, name=f"{name} - {dataset.path}")
+                        # Set time and channel metadata
+                        if has_time:
+                            dgd.time = t
+                        if has_channel:
+                            dgd.channel = c
+
+                        # Start slice in the middle of the volume
+                        ijk_min = (0, 0, dgd.size[2] // 2)
+                        ijk_max = (dgd.size[0], dgd.size[1], dgd.size[2] // 2)
+                        ijk_step = initial_step
+
+                        vol = Volume(session, dgd, region=(ijk_min, ijk_max, ijk_step))
+                        vol.set_display_style("image")
+
+                        # Adjust rendering limit (see comment below about 16 MVoxel limit)
+                        vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
+
+                        # Apply OMERO metadata if available
+                        if omero and has_channel and c < len(omero.channels):
+                            ch_meta = omero.channels[c]
+
+                            # Apply channel label to volume name
+                            if ch_meta.label:
+                                vol_name = f"{name} - {ch_meta.label}"
+                                if has_time:
+                                    vol_name += f" t={t}"
+                                vol.name = vol_name
+
+                            # Apply channel color
+                            try:
+                                rgba = hex_to_rgba(ch_meta.color)
+                                vol.set_parameters(default_rgba=rgba)
+                            except (ValueError, IndexError):
+                                # If color parsing fails, use default
+                                pass
+
+                            # Set initial display based on OMERO active flag
+                            vol.display = t == 0 and ch_meta.active
+                        else:
+                            # Set initial display: show all channels at t=0, hide others
+                            vol.display = t == 0
+
+                        volumes.append(vol)
+
+                self.add(volumes)
+
+            else:
+                # Original 3D-only behavior
+                arrays = [a for a, _, _ in self.arrays_datasets_sizes]
+                sizes = [sz for _, _, sz in self.arrays_datasets_sizes]
+                dgd = WrappedZarrGrid(arrays, steps=sizes, name=f"{name}")
 
                 # Start slice in the middle of the volume
                 ijk_min = (0, 0, dgd.size[2] // 2)
@@ -228,11 +531,116 @@ class ZarrModel(Model):
                     dgd.size[2] // 2,
                 )
                 ijk_step = initial_step
-                vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))
+                vol = Volume(session, dgd, region=(ijk_min, ijk_max, ijk_step))
                 vol.set_display_style("image")
-                # See explanation above
+
+                # ChimeraX has an upper limit of 16 MVoxel for rendered voxels. This limit is set in the rendering_options
+                # of the Volume. If this is too high, ChimeraX will automatically show the volume at full resolution, i.e.
+                # step = (1,1,1). This is not ideal when we're streaming the data from a remote source on demand.
+                #
+                # To avoid that, we need to make sure that the limit is adjusted according to the current region. This will
+                # prevent moving the slider in the volume viewer to change the step size upon first move.
+                # This is how to do it:
                 vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
                 self.add([vol])
+
+        else:
+            # Load only requested scales
+            if initial_step is None:
+                initial_step = (1, 1, 1)
+
+            self.arrays_datasets_sizes = [a for a in self.arrays_datasets_sizes if a[1].path in scales]
+
+            # Handle time/channel dimensions
+            if has_time or has_channel:
+                # Get time and channel axis indices (OME-Zarr order: TCZYX)
+                time_axis_idx = axes_types.index("time") if has_time else None
+                channel_axis_idx = axes_types.index("channel") if has_channel else None
+
+                # Get array with most detail (finest resolution in requested scales)
+                first_array = self.arrays_datasets_sizes[-1][0]
+
+                # Determine dimensions
+                n_time = first_array.shape[time_axis_idx] if has_time else 1
+                n_channel = first_array.shape[channel_axis_idx] if has_channel else 1
+
+                # Create grids for each time/channel/scale combination
+                volumes = []
+                for t in range(n_time):
+                    for c in range(n_channel):
+                        for array, dataset, size in self.arrays_datasets_sizes:
+                            dgd = ZarrGrid3DSlice(
+                                array,
+                                time_index=t if has_time else None,
+                                channel_index=c if has_channel else None,
+                                step=size,
+                                name=f"{name} - {dataset.path} t={t} c={c}",
+                            )
+
+                            # Set time and channel metadata
+                            if has_time:
+                                dgd.time = t
+                            if has_channel:
+                                dgd.channel = c
+
+                            # Start slice in the middle of the volume
+                            ijk_min = (0, 0, dgd.size[2] // 2)
+                            ijk_max = (dgd.size[0], dgd.size[1], dgd.size[2] // 2)
+                            ijk_step = initial_step
+
+                            vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))
+                            vol.set_display_style("image")
+
+                            # See explanation above about rendering limit
+                            vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
+
+                            # Apply OMERO metadata if available
+                            if omero and has_channel and c < len(omero.channels):
+                                ch_meta = omero.channels[c]
+
+                                # Apply channel label to volume name
+                                if ch_meta.label:
+                                    vol_name = f"{name} - {dataset.path} - {ch_meta.label}"
+                                    if has_time:
+                                        vol_name += f" t={t}"
+                                    vol.name = vol_name
+
+                                # Apply channel color
+                                try:
+                                    rgba = hex_to_rgba(ch_meta.color)
+                                    vol.set_parameters(default_rgba=rgba)
+                                except (ValueError, IndexError):
+                                    # If color parsing fails, use default
+                                    pass
+
+                                # Set initial display based on OMERO active flag
+                                vol.display = t == 0 and ch_meta.active
+                            else:
+                                # Set initial display: show all channels at t=0, hide others
+                                vol.display = t == 0
+
+                            volumes.append(vol)
+
+                self.add(volumes)
+
+            else:
+                # Original 3D-only behavior
+                for array, dataset, size in self.arrays_datasets_sizes:
+                    dgd = ZarrGrid(array, step=size, name=f"{name} - {dataset.path}")
+
+                    # Start slice in the middle of the volume
+                    ijk_min = (0, 0, dgd.size[2] // 2)
+                    ijk_max = (
+                        dgd.size[0],
+                        dgd.size[1],
+                        dgd.size[2] // 2,
+                    )
+                    ijk_step = initial_step
+                    vol = Volume(session, dgd, (ijk_min, ijk_max, ijk_step))
+                    vol.set_display_style("image")
+                    # See explanation above
+                    vol.new_region(vol.region[0], vol.region[1], vol.region[2], adjust_step=False)
+                    self.add([vol])
 
     @property
     def scales(self):
@@ -324,13 +732,54 @@ class WrappedZarrGrid(GridData):
 
     def __init__(
         self,
-        arrays: List[Array],
+        arrays: List[Array] = None,
         origins: List[Tuple[float, float, float]] = None,
         steps: List[Tuple[float, float, float]] = None,
         file_type: str = "zarr",
         path: str = "",
         name: str = "",
+        grids: List[GridData] = None,
     ) -> None:
+        # If grids are provided, use them directly instead of creating from arrays
+        if grids is not None:
+            # Use the finest resolution grid for initialization
+            finest_grid = grids[-1]
+
+            GridData.__init__(
+                self,
+                finest_grid.size,
+                finest_grid.value_type,
+                finest_grid.origin,
+                finest_grid.step,
+                path=finest_grid.path,
+                file_type=finest_grid.file_type,
+                name=name,
+            )
+
+            self.arrays = None
+            self.grids = grids
+
+            # Calculate relative step sizes from the provided grids
+            self._rel_step_sizes: List[Tuple[int, ...]] = []
+            base_step = finest_grid.step
+            for g in grids:
+                relstep = (g.step[0] / base_step[0], g.step[1] / base_step[1], g.step[2] / base_step[2])
+
+                if not np.allclose(relstep, [int(s) for s in relstep]):
+                    raise NotImplementedError(
+                        f"Non-integer scaling levels are not supported. Relative steps determined: {relstep}",
+                    )
+
+                self._rel_step_sizes.append((int(relstep[0]), int(relstep[1]), int(relstep[2])))
+
+            # Precompute sampling strategies for isotropic steps (1, 1, 1) - (16, 16, 16)
+            self._strats: Dict[Tuple[int, ...], Tuple[GridData, Tuple[int, ...], Tuple[int, ...]]] = {
+                (s, s, s): self.get_sampling_strategy((s, s, s)) for s in range(1, 17)
+            }
+
+            return
+
+        # Original behavior: create grids from arrays
         # Default origins and steps
         if origins is None:
             origins = [(0, 0, 0) for _ in range(len(arrays))]

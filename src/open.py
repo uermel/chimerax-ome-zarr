@@ -27,6 +27,73 @@ def _open(
 
     model = ZarrModel(name, session, root, scales, initial_step)
 
+    # Check if we have time/channel volumes that need to be wrapped
+    volumes = list(model.child_models())
+    if len(volumes) > 0 and hasattr(volumes[0], "data"):
+        # Check for time series and/or multichannel data
+        time_indices = [v.data.time for v in volumes if hasattr(v.data, "time") and v.data.time is not None]
+        channel_indices = [v.data.channel for v in volumes if hasattr(v.data, "channel") and v.data.channel is not None]
+
+        is_time_series = len(time_indices) == len(volumes) and len(set(time_indices)) > 1
+        is_multichannel = len(channel_indices) == len(volumes) and len(set(channel_indices)) > 1
+
+        if is_time_series or is_multichannel:
+            # Force initial rendering before reparenting to prevent KeyError issues
+            # This follows ChimeraX's pattern in volume.py:3724-3727 where update_drawings()
+            # is called to ensure surfaces/images are created before final model setup
+            for v in volumes:
+                if v.display:
+                    v.update_drawings()
+
+            # Clean up volumes from VolumeUpdateManager after rendering completes
+            # This prevents KeyError when volumes are reparented and their display state changes
+            vm = getattr(session, "_volume_update_manager", None)
+            if vm is not None:
+                for v in volumes:
+                    # Use discard() to safely remove from tracking sets
+                    vm._volumes_to_update.discard(v)
+                    vm._displayed_volumes_to_update.discard(v)
+
+            # Remove volumes from ZarrModel without deleting them
+            # (The model was never added to session, so just detach the volumes)
+            model.remove_drawings(volumes, delete=False)
+
+            # Create appropriate wrapper model
+            if is_time_series and is_multichannel:
+                # Both time and channel dimensions
+                from chimerax.map.volume import MultiChannelSeries
+                from chimerax.map_series import MapSeries
+
+                # Group volumes by channel
+                channel_groups = {}
+                for v in volumes:
+                    c = v.data.channel
+                    if c not in channel_groups:
+                        channel_groups[c] = []
+                    channel_groups[c].append(v)
+
+                # Create MapSeries for each channel
+                map_series = []
+                for c in sorted(channel_groups.keys()):
+                    ms = MapSeries(f"{name} channel {c}", channel_groups[c], session)
+                    map_series.append(ms)
+
+                # Create MultiChannelSeries
+                model = MultiChannelSeries(name, map_series, session)
+
+            elif is_time_series:
+                # Time dimension only
+                from chimerax.map_series import MapSeries
+
+                model = MapSeries(name, volumes, session)
+
+            elif is_multichannel:
+                # Channel dimension only
+                from chimerax.map.volume import MapChannelsModel
+
+                model = MapChannelsModel(name, volumes, session)
+                model.show_n_channels(len(volumes))  # Show all channels as requested
+
     show_volume_dialog(session)
     return [model], f"Opened {full_name}."
 
