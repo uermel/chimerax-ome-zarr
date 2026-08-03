@@ -213,6 +213,31 @@ def test_dataset_and_group_transforms_are_composed_and_converted(zarr_format):
 
 
 @pytest.mark.parametrize("zarr_format", [2, 3])
+def test_identity_transform_is_noop_at_group_and_dataset_levels(zarr_format):
+    group_identity, _ = _make_image(
+        zarr_format,
+        ["time", "space", "space"],
+        (2, 6, 8),
+        transforms=[{"type": "scale", "scale": [1, 2, 3]}],
+        group_transforms=[{"type": "identity"}],
+    )
+    identity_dataset, _ = _make_image(
+        zarr_format,
+        ["time", "space", "space"],
+        (2, 6, 8),
+        transforms=[{"type": "identity"}],
+    )
+
+    scaled = parse_ome_zarr_metadata(group_identity).multiscales.datasets[0]
+    unchanged = parse_ome_zarr_metadata(identity_dataset).multiscales.datasets[0]
+
+    assert scaled.scale == pytest.approx((1.0, 2.0, 3.0))
+    assert scaled.translation == pytest.approx((0.0, 0.0, 0.0))
+    assert unchanged.scale == pytest.approx((1.0, 1.0, 1.0))
+    assert unchanged.translation == pytest.approx((0.0, 0.0, 0.0))
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
 def test_path_backed_transform_vectors(zarr_format):
     store = zarr.storage.MemoryStore()
     group = zarr.create_group(store=store, zarr_format=zarr_format)

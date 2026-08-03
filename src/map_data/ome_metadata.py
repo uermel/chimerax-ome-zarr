@@ -198,6 +198,7 @@ def _parse_transform_sequence(
         raise OMEZarrFormatError("coordinateTransformations must be a list.")
 
     scale_count = 0
+    identity_count = 0
     translation_count = 0
     scale = np.ones(ndim, dtype=np.float64)
     translation = np.zeros(ndim, dtype=np.float64)
@@ -207,7 +208,9 @@ def _parse_transform_sequence(
         if not isinstance(transform, Mapping):
             raise OMEZarrFormatError("Every coordinate transform must be an object.")
         transform_type = transform.get("type")
-        if transform_type == "scale":
+        if transform_type == "identity":
+            identity_count += 1
+        elif transform_type == "scale":
             if seen_translation:
                 raise OMEZarrFormatError("Scale transforms must precede translation transforms.")
             scale_count += 1
@@ -220,13 +223,14 @@ def _parse_transform_sequence(
             translation += np.asarray(_read_transform_vector(group, transform, "translation", ndim))
         else:
             raise OMEZarrFormatError(
-                f"Unsupported multiscale coordinate transform '{transform_type}'; expected scale or translation.",
+                f"Unsupported multiscale coordinate transform '{transform_type}'; "
+                "expected identity, scale, or translation.",
             )
 
-    if require_scale and scale_count != 1:
-        raise OMEZarrFormatError("A dataset coordinate-transform sequence must contain exactly one scale transform.")
-    if not require_scale and scale_count > 1:
-        raise OMEZarrFormatError("A multiscale coordinate-transform sequence may contain at most one scale transform.")
+    if require_scale and scale_count == 0 and identity_count == 0:
+        raise OMEZarrFormatError("A dataset coordinate-transform sequence must contain a scale or identity transform.")
+    if scale_count > 1:
+        raise OMEZarrFormatError("A coordinate-transform sequence may contain at most one scale transform.")
     if translation_count > 1:
         raise OMEZarrFormatError("A coordinate-transform sequence may contain at most one translation transform.")
     return tuple(scale.tolist()), tuple(translation.tolist())

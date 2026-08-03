@@ -10,7 +10,7 @@ Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 - Lazy integer index maps for ChimeraX's `segmentation surfaces` / `segmentation colors` commands.
 - Native, editable ChimeraX `Segmentation` models for declared nonzero label values.
 - Local and remote Zarr stores supported by `fsspec`.
-- Scale and translation transformations, converted to ChimeraX Angstrom coordinates.
+- Identity, scale, and translation transformations, converted to ChimeraX Angstrom coordinates.
 - Loading specific resolution levels as separate volumes.
 - Loading an integer-scaled, aligned pyramid as one Volume whose resolution follows ChimeraX's `step` setting.
 
