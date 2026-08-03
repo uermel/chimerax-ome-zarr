@@ -80,12 +80,12 @@ Read-ahead is best-effort: ChimeraX's built-in Map Series widget continues playi
 unbuffered frame if playback catches the network. This decoded-data buffer is independent of the `vseries`
 `cacheFrames` rendering cache. Plane display continues to use chunk-aligned spatial caching without temporal reads.
 
-Associated label images are discovered automatically and opened hidden. Each label image is available as an integer
+Associated label images are opt-in and opened hidden when requested. Each label image is available as an integer
 index map, while label values declared in OME `colors` or `properties` metadata also appear as editable masks in
-ChimeraX's **Segmentations** tool. To skip associated labels:
+ChimeraX's **Segmentations** tool. To discover and open associated labels:
 
 ```
-open /path/to/file.zarr labels false
+open /path/to/file.zarr labels true
 ```
 
 Label edits are copy-on-write: they update the in-session index map and sibling masks, but never modify the opened

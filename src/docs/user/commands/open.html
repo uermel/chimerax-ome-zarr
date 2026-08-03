@@ -19,10 +19,10 @@
         When no scales are specified, this command creates lazily loaded multiscale Volumes and chooses a compatible
         resolution from the "step" setting of the volume command or Volume Viewer. When scales are specified, each
         selected level is opened independently, including its time/channel hierarchy and physical origin.<br>
-        Associated OME-Zarr labels are opened automatically but hidden. Their integer index maps work with the
+        Associated OME-Zarr labels are opt-in and opened hidden when requested. Their integer index maps work with the
         <b>segmentation surfaces</b> and <b>segmentation colors</b> commands. Nonzero label values declared in
         image-label colors or properties metadata are also registered as editable models in ChimeraX's
-        <b>Segmentations</b> tool. Set <b>labels false</b> to skip associated-label discovery.<br>
+        <b>Segmentations</b> tool. Set <b>labels true</b> to discover and open associated labels.<br>
         For 3D time series, temporal read-ahead preserves the current region, sampling step, channel, and resolution
         level. If <b>readAhead</b> is omitted, an adaptive memory-bounded buffer is filled after the current frame is
         drawn. Set <b>readAhead</b> to a nonnegative number to limit the number of future timepoints, or 0 to disable
@@ -35,7 +35,7 @@
     <blockquote> <b>open ngff:s3://bucket/path/to/image.zarr</b> - open an OME-Zarr from AWS S3</blockquote>
     <blockquote> <b>open ngff:s3://bucket/path/to/image.zarr scales 1,2</b> - open two multiscale levels of an OME-Zarr from AWS S3</blockquote>
     <blockquote> <b>open ngff:https://example.org/image.zarr readAhead 3</b> - buffer at most three future timepoints</blockquote>
-    <blockquote> <b>open /path/to/image.zarr labels false</b> - open an image without associated labels</blockquote>
+    <blockquote> <b>open /path/to/image.zarr labels true</b> - open an image with associated labels</blockquote>
     <p></p>
     <hr>
     <address>Utz H. Ermel / April 2024</address>

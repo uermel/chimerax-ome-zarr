@@ -448,7 +448,7 @@ def _open(
     full_name: str = "",
     name: str = "",
     initial_step: Tuple[int, int, int] = (4, 4, 4),
-    labels: bool = True,
+    labels: bool = False,
     read_ahead: Optional[int] = None,
     filesystem: Optional[AbstractFileSystem] = None,
 ) -> Tuple[List[Model], str]:
@@ -481,10 +481,10 @@ def open_ome_zarr(
     session,
     data: List[str],
     scales: List[str] = None,
-    labels: bool = True,
+    labels: bool = False,
     read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
-    """Open local or remote OME-Zarr images and their associated labels."""
+    """Open local or remote OME-Zarr images, optionally with associated labels."""
 
     retm = []
     rets = []
@@ -514,7 +514,7 @@ def open_ome_zarr_from_fs(
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     log: bool = True,
-    labels: bool = True,
+    labels: bool = False,
     read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
     root = _store_from_filesystem(fs, path)
@@ -522,7 +522,7 @@ def open_ome_zarr_from_fs(
         from chimerax.core.commands import log_equivalent_command
 
         proto = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
-        label_option = "" if labels else " labels false"
+        label_option = " labels true" if labels else ""
         read_ahead_option = "" if read_ahead is None else f" readAhead {read_ahead}"
         log_equivalent_command(session, f"open ngff:{proto}://{path}{label_option}{read_ahead_option}")
     return _open(
@@ -544,7 +544,7 @@ def open_ome_zarr_from_store(
     name: str,
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
-    labels: bool = True,
+    labels: bool = False,
     read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
     return _open(

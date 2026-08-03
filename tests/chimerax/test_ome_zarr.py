@@ -816,7 +816,7 @@ def test_associated_labels_open_as_index_map_and_native_segmentations(zarr_forma
     session = Session("OME-Zarr labels integration test", offscreen_rendering=True)
     register_model_trigger_handlers(session)
 
-    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=True)
     session.models.add(models)
     all_models = models[0].all_models()
     segmentations = [model for model in all_models if isinstance(model, Segmentation)]
@@ -875,7 +875,7 @@ def test_singleton_channel_labels_broadcast_and_share_edits():
     )
     session = Session("OME-Zarr label broadcasting test", offscreen_rendering=True)
 
-    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=True)
     session.models.add(models)
     segmentations = [model for model in models[0].all_models() if isinstance(model, Segmentation)]
 
@@ -934,7 +934,7 @@ def test_label_pyramid_stays_lazy_until_first_edit():
     label_group.attrs["ome"] = label_ome
     session = Session("OME-Zarr lazy label pyramid test", offscreen_rendering=True)
 
-    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=True)
     session.models.add(models)
     index_map = next(
         model
@@ -965,7 +965,7 @@ def test_undeclared_label_values_open_index_map_without_scanning():
     )
     session = Session("OME-Zarr undeclared labels test", offscreen_rendering=True)
 
-    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=True)
     session.models.add(models)
     all_models = models[0].all_models()
     index_map = next(
@@ -979,8 +979,9 @@ def test_undeclared_label_values_open_index_map_without_scanning():
     session.models.close(models)
 
 
-def test_labels_false_skips_associated_label_discovery():
+def test_associated_labels_are_opt_in():
     from chimerax.core.session import Session
+    from chimerax.map.volume import Volume
     from chimerax.segmentations import Segmentation
 
     group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
@@ -991,12 +992,16 @@ def test_labels_false_skips_associated_label_discovery():
         np.ones((4, 6, 8), dtype=np.uint8),
         colors=[{"label-value": 1, "rgba": [255, 0, 0, 255]}],
     )
-    session = Session("OME-Zarr labels false test", offscreen_rendering=True)
+    session = Session("OME-Zarr labels opt-in test", offscreen_rendering=True)
 
-    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=False)
+    models, _ = open_ome_zarr_from_store(session, group.store, "image")
     session.models.add(models)
 
-    assert not any(isinstance(model, Segmentation) for model in models[0].all_models())
+    all_models = models[0].all_models()
+    assert not any(isinstance(model, Segmentation) for model in all_models)
+    assert not any(
+        isinstance(model, Volume) and getattr(model.data, "file_type", None) == "ome-zarr-label" for model in all_models
+    )
     session.models.close(models)
 
 
