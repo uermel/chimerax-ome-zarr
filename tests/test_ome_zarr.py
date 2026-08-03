@@ -7,6 +7,8 @@ import zarr
 
 from src.map_data.ome_metadata import (
     OMEZarrFormatError,
+    ome_zarr_group_kind,
+    parse_labels_metadata,
     parse_ome_zarr_metadata,
     spatial_transform_angstrom,
 )
@@ -101,6 +103,47 @@ def _make_image(
             ome["omero"] = omero
         group.attrs["ome"] = ome
     return group, data
+
+
+def _add_label_image(source_group, zarr_format, axis_types, data, *, colors=None, properties=None, name="cells"):
+    labels_group = source_group.create_group("labels")
+    if zarr_format == 2:
+        labels_group.attrs["labels"] = [name]
+    else:
+        labels_group.attrs["ome"] = {"version": "0.5", "labels": [name]}
+
+    label_group = labels_group.create_group(name)
+    axes = _axes(axis_types)
+    dimension_names = tuple(axis["name"] for axis in axes)
+    _create_array(
+        label_group,
+        zarr_format,
+        "0",
+        data,
+        tuple(max(1, min(4, size)) for size in data.shape),
+        dimension_names=dimension_names,
+    )
+    multiscale = {
+        "name": name,
+        "axes": axes,
+        "datasets": [{"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1] * data.ndim}]}],
+    }
+    image_label = {
+        "version": "0.4" if zarr_format == 2 else "0.5",
+        "source": {"image": "../../"},
+        "colors": colors or [],
+        "properties": properties or [],
+    }
+    if zarr_format == 2:
+        multiscale["version"] = "0.4"
+        label_group.attrs.update({"multiscales": [multiscale], "image-label": image_label})
+    else:
+        label_group.attrs["ome"] = {
+            "version": "0.5",
+            "multiscales": [multiscale],
+            "image-label": image_label,
+        }
+    return label_group
 
 
 @pytest.mark.parametrize("zarr_format", [2, 3])
@@ -323,20 +366,62 @@ def test_v3_dimension_names_must_match_axes():
         parse_ome_zarr_metadata(group)
 
 
-@pytest.mark.parametrize("unsupported", ["labels", "multiple"])
-def test_unsupported_image_structures_fail_clearly(unsupported):
+def test_image_group_with_labels_child_remains_a_supported_image():
     group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
-    if unsupported == "labels":
-        group.create_group("labels")
-        match = "label"
-    else:
-        ome = deepcopy(group.attrs["ome"])
-        ome["multiscales"].append(deepcopy(ome["multiscales"][0]))
-        group.attrs["ome"] = ome
-        match = "Exactly one"
+    group.create_group("labels")
 
-    with pytest.raises(OMEZarrFormatError, match=match):
+    metadata = parse_ome_zarr_metadata(group)
+
+    assert metadata.image_label is None
+    assert ome_zarr_group_kind(group) == "image"
+
+
+def test_multiple_multiscales_entries_still_fail_clearly():
+    group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
+    ome = deepcopy(group.attrs["ome"])
+    ome["multiscales"].append(deepcopy(ome["multiscales"][0]))
+    group.attrs["ome"] = ome
+
+    with pytest.raises(OMEZarrFormatError, match="Exactly one"):
         parse_ome_zarr_metadata(group)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_label_collection_and_image_label_metadata_are_normalized(zarr_format):
+    group, _ = _make_image(zarr_format, ["space", "space", "space"], (4, 6, 8))
+    label_group = _add_label_image(
+        group,
+        zarr_format,
+        ["space", "space", "space"],
+        np.zeros((4, 6, 8), dtype=np.uint16),
+        colors=[{"label-value": 3, "rgba": [10, 20, 30, 128]}],
+        properties=[{"label-value": 3, "class": "nucleus", "score": 7}],
+    )
+
+    labels = parse_labels_metadata(group["labels"])
+    metadata = parse_ome_zarr_metadata(label_group)
+
+    assert labels.paths == ("cells",)
+    assert ome_zarr_group_kind(label_group) == "image-label"
+    assert metadata.image_label.source_image == "../../"
+    assert metadata.image_label.values[0].value == 3
+    assert metadata.image_label.values[0].rgba == (10, 20, 30, 128)
+    assert metadata.image_label.values[0].properties == {"class": "nucleus", "score": 7}
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_label_arrays_must_be_integer(zarr_format):
+    group, _ = _make_image(zarr_format, ["space", "space", "space"], (4, 6, 8))
+    label_group = _add_label_image(
+        group,
+        zarr_format,
+        ["space", "space", "space"],
+        np.zeros((4, 6, 8), dtype=np.float32),
+        colors=[{"label-value": 1, "rgba": [255, 0, 0, 255]}],
+    )
+
+    with pytest.raises(OMEZarrFormatError, match="integer"):
+        parse_ome_zarr_metadata(label_group)
 
 
 def test_ome_and_zarr_versions_must_match():
@@ -396,6 +481,242 @@ def test_explicit_scales_preserve_independent_time_channel_hierarchies():
     assert [model.name for model in scale_models] == ["image - 0", "image - 1"]
     assert all(len(model.map_series) == 3 for model in scale_models)
     assert all(len(series.maps) == 2 for model in scale_models for series in model.map_series)
+    session.models.close(models)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_associated_labels_open_as_index_map_and_native_segmentations(zarr_format):
+    from chimerax.core.session import Session
+    from chimerax.map.volume import Volume
+    from chimerax.segmentations import Segmentation
+    from chimerax.segmentations.segmentation_tracker import get_tracker, register_model_trigger_handlers
+
+    group, _ = _make_image(zarr_format, ["space", "space", "space"], (4, 6, 8))
+    label_data = np.zeros((4, 6, 8), dtype=np.uint16)
+    label_data[0, 0, 0] = 1
+    label_data[0, 0, 1] = 2
+    label_group = _add_label_image(
+        group,
+        zarr_format,
+        ["space", "space", "space"],
+        label_data,
+        colors=[
+            {"label-value": 1, "rgba": [255, 0, 0, 255]},
+            {"label-value": 2, "rgba": [0, 255, 0, 128]},
+        ],
+        properties=[{"label-value": 1, "class": "nucleus"}, {"label-value": 2, "name": "cell"}],
+    )
+    session = Session("OME-Zarr labels integration test", offscreen_rendering=True)
+    register_model_trigger_handlers(session)
+
+    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    session.models.add(models)
+    all_models = models[0].all_models()
+    segmentations = [model for model in all_models if isinstance(model, Segmentation)]
+    index_maps = [
+        model
+        for model in all_models
+        if isinstance(model, Volume) and getattr(model.data, "file_type", None) == "ome-zarr-label"
+    ]
+
+    assert len(index_maps) == 1
+    assert index_maps[0].display is False
+    assert sorted(segmentation.ome_label_value for segmentation in segmentations) == [1, 2]
+    assert all(segmentation.reference_volume is not None for segmentation in segmentations)
+    reference = segmentations[0].reference_volume
+    assert set(segmentations) == get_tracker().segmentations_for_volume(reference)
+    assert all(segmentation.display is False for segmentation in segmentations)
+    assert next(segmentation for segmentation in segmentations if segmentation.ome_label_value == 2).default_rgba == (
+        0.0,
+        1.0,
+        0.0,
+        128 / 255,
+    )
+
+    class AddVoxel:
+        def execute(self, grid, reference_grid):
+            del reference_grid
+            grid.array[0, 0, 0] = 1
+
+    label_two = next(segmentation for segmentation in segmentations if segmentation.ome_label_value == 2)
+    label_one = next(segmentation for segmentation in segmentations if segmentation.ome_label_value == 1)
+    label_two.segment(AddVoxel())
+
+    assert index_maps[0].data.read_matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[2, 2]]]
+    assert label_one.data.read_matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[0, 0]]]
+    np.testing.assert_array_equal(label_group["0"][:], label_data)
+    session.models.close(models)
+
+
+def test_singleton_channel_labels_broadcast_and_share_edits():
+    from chimerax.core.session import Session
+    from chimerax.segmentations import Segmentation
+
+    group, _ = _make_image(3, ["channel", "space", "space", "space"], (2, 4, 6, 8))
+    label_data = np.zeros((1, 4, 6, 8), dtype=np.uint8)
+    label_data[0, 0, 0, 0] = 5
+    _add_label_image(
+        group,
+        3,
+        ["channel", "space", "space", "space"],
+        label_data,
+        colors=[{"label-value": 5, "rgba": [10, 20, 30, 255]}],
+    )
+    session = Session("OME-Zarr label broadcasting test", offscreen_rendering=True)
+
+    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    session.models.add(models)
+    segmentations = [model for model in models[0].all_models() if isinstance(model, Segmentation)]
+
+    assert len(segmentations) == 2
+    assert sorted(segmentation.reference_volume.data.channel for segmentation in segmentations) == [0, 1]
+
+    class RemoveVoxel:
+        def execute(self, grid, reference_grid):
+            del reference_grid
+            grid.array[0, 0, 0] = 0
+
+    segmentations[0].segment(RemoveVoxel())
+    other = segmentations[1]
+    assert other.data.read_matrix((0, 0, 0), (1, 1, 1), (1, 1, 1)).item() == 0
+    session.models.close(models)
+
+
+def test_label_pyramid_stays_lazy_until_first_edit():
+    from chimerax.core.session import Session
+    from chimerax.map.volume import Volume
+    from chimerax.segmentations import Segmentation
+
+    group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
+    _create_array(
+        group,
+        3,
+        "1",
+        np.zeros((2, 3, 4), dtype=np.uint16),
+        (2, 3, 4),
+        dimension_names=("z", "y", "x"),
+    )
+    ome = deepcopy(group.attrs["ome"])
+    ome["multiscales"][0]["datasets"].append(
+        {"path": "1", "coordinateTransformations": [{"type": "scale", "scale": [2, 2, 2]}]},
+    )
+    group.attrs["ome"] = ome
+    label_group = _add_label_image(
+        group,
+        3,
+        ["space", "space", "space"],
+        np.full((4, 6, 8), 7, dtype=np.uint8),
+        colors=[{"label-value": 7, "rgba": [255, 0, 0, 255]}],
+    )
+    _create_array(
+        label_group,
+        3,
+        "1",
+        np.full((2, 3, 4), 7, dtype=np.uint8),
+        (2, 3, 4),
+        dimension_names=("z", "y", "x"),
+    )
+    label_ome = deepcopy(label_group.attrs["ome"])
+    label_ome["multiscales"][0]["datasets"].append(
+        {"path": "1", "coordinateTransformations": [{"type": "scale", "scale": [2, 2, 2]}]},
+    )
+    label_group.attrs["ome"] = label_ome
+    session = Session("OME-Zarr lazy label pyramid test", offscreen_rendering=True)
+
+    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    session.models.add(models)
+    index_map = next(
+        model
+        for model in models[0].all_models()
+        if isinstance(model, Volume) and getattr(model.data, "file_type", None) == "ome-zarr-label"
+    )
+    segmentation = next(model for model in models[0].all_models() if isinstance(model, Segmentation))
+
+    assert index_map.data.state.materialized is False
+    assert np.all(index_map.data.read_matrix((0, 0, 0), index_map.data.size, (2, 2, 2)) == 7)
+    assert index_map.data.state.materialized is False
+    _ = segmentation.data.array
+    assert index_map.data.state.materialized is True
+    session.models.close(models)
+
+
+def test_undeclared_label_values_open_index_map_without_scanning():
+    from chimerax.core.session import Session
+    from chimerax.map.volume import Volume
+    from chimerax.segmentations import Segmentation
+
+    group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
+    _add_label_image(
+        group,
+        3,
+        ["space", "space", "space"],
+        np.full((4, 6, 8), 9, dtype=np.uint8),
+    )
+    session = Session("OME-Zarr undeclared labels test", offscreen_rendering=True)
+
+    models, _ = open_ome_zarr_from_store(session, group.store, "image")
+    session.models.add(models)
+    all_models = models[0].all_models()
+    index_map = next(
+        model
+        for model in all_models
+        if isinstance(model, Volume) and getattr(model.data, "file_type", None) == "ome-zarr-label"
+    )
+
+    assert not any(isinstance(model, Segmentation) for model in all_models)
+    assert index_map.data.state.materialized is False
+    session.models.close(models)
+
+
+def test_labels_false_skips_associated_label_discovery():
+    from chimerax.core.session import Session
+    from chimerax.segmentations import Segmentation
+
+    group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
+    _add_label_image(
+        group,
+        3,
+        ["space", "space", "space"],
+        np.ones((4, 6, 8), dtype=np.uint8),
+        colors=[{"label-value": 1, "rgba": [255, 0, 0, 255]}],
+    )
+    session = Session("OME-Zarr labels false test", offscreen_rendering=True)
+
+    models, _ = open_ome_zarr_from_store(session, group.store, "image", labels=False)
+    session.models.add(models)
+
+    assert not any(isinstance(model, Segmentation) for model in models[0].all_models())
+    session.models.close(models)
+
+
+def test_direct_image_label_open_resolves_its_source():
+    from chimerax.core.session import Session
+    from chimerax.segmentations import Segmentation
+
+    filesystem = fsspec.filesystem("memory")
+    source_path = "/direct-source.zarr"
+    write_store = zarr.storage.FsspecStore.from_mapper(filesystem.get_mapper(source_path))
+    group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8), store=write_store)
+    _add_label_image(
+        group,
+        3,
+        ["space", "space", "space"],
+        np.ones((4, 6, 8), dtype=np.uint8),
+        colors=[{"label-value": 1, "rgba": [255, 0, 0, 255]}],
+    )
+    session = Session("OME-Zarr direct label test", offscreen_rendering=True)
+
+    models, _ = open_ome_zarr_from_fs(
+        session,
+        filesystem,
+        f"{source_path}/labels/cells",
+        log=False,
+    )
+    session.models.add(models)
+
+    segmentations = [model for model in models[0].all_models() if isinstance(model, Segmentation)]
+    assert len(segmentations) == 1
+    assert segmentations[0].reference_volume in models[0].all_models()
     session.models.close(models)
 
 

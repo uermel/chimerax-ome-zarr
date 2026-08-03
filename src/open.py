@@ -1,16 +1,29 @@
 # vim: set expandtab shiftwidth=4 softtabstop=4:
 
 import os
-from typing import List, Tuple
+import posixpath
+from typing import List, Optional, Tuple
 
 import fsspec
 import zarr
 from chimerax.core.models import Model
 from chimerax.core.session import Session
-from chimerax.map.volume import show_volume_dialog
+from chimerax.map.volume import Volume, show_volume_dialog
 from fsspec import AbstractFileSystem
 
+from .map_data.labels import build_label_bridge
+from .map_data.ome_metadata import (
+    OMEZarrFormatError,
+    ome_zarr_group_kind,
+    parse_labels_metadata,
+    parse_ome_zarr_metadata,
+)
 from .map_data.zarr_grid import ZarrModel
+
+
+def _warning(session, template: str, *args) -> None:
+    message = template.format(*args)
+    session.logger.warning(message)
 
 
 def _store_from_filesystem(fs: AbstractFileSystem, path: str):
@@ -18,6 +31,10 @@ def _store_from_filesystem(fs: AbstractFileSystem, path: str):
 
     mapper = fs.get_mapper(path)
     return zarr.storage.FsspecStore.from_mapper(mapper, read_only=True)
+
+
+def _open_group(root):
+    return root if isinstance(root, zarr.Group) else zarr.open_group(store=root, mode="r")
 
 
 def _wrap_time_and_channels(name: str, volumes, session):
@@ -60,67 +77,334 @@ def _wrap_time_and_channels(name: str, volumes, session):
     return volumes[0] if len(volumes) == 1 else None
 
 
-def _open(
+def _remove_from_volume_update_manager(session, volumes) -> None:
+    vm = getattr(session, "_volume_update_manager", None)
+    if vm is not None:
+        for volume in volumes:
+            vm._volumes_to_update.discard(volume)
+            vm._displayed_volumes_to_update.discard(volume)
+
+
+def _wrap_scale_hierarchies(name: str, volumes, scales, session):
+    scale_groups = {}
+    for volume in volumes:
+        scale_groups.setdefault(getattr(volume.data, "scale_path", None), []).append(volume)
+    if len(scale_groups) == 1:
+        return _wrap_time_and_channels(name, volumes, session)
+
+    container = Model(name, session)
+    wrappers = []
+    ordered_scales = scales or list(scale_groups)
+    for scale in ordered_scales:
+        scale_volumes = scale_groups.get(scale, [])
+        if scale_volumes:
+            wrappers.append(_wrap_time_and_channels(f"{name} - {scale}", scale_volumes, session))
+    container.add(wrappers)
+    return container
+
+
+def _prepare_image_model(
     session: Session,
-    root: zarr.storage,
-    scales: List[str],
-    full_name: str = "",
-    name: str = "",
-    initial_step: Tuple[int, int, int] = (4, 4, 4),
-) -> Tuple[List[Model], str]:
+    group: zarr.Group,
+    scales: Optional[List[str]],
+    name: str,
+    initial_step: Tuple[int, int, int],
+):
     if scales is not None:
         initial_step = (1, 1, 1)
 
-    model = ZarrModel(name, session, root, scales, initial_step)
-
-    # Check if we have time/channel volumes that need to be wrapped.
+    model = ZarrModel(name, session, group, scales, initial_step)
     volumes = list(model.child_models())
-    if volumes and hasattr(volumes[0], "data"):
-        time_indices = [volume.data.time for volume in volumes if volume.data.time is not None]
-        channel_indices = [volume.data.channel for volume in volumes if volume.data.channel is not None]
-        needs_wrapper = (
-            len(time_indices) == len(volumes)
-            and len(set(time_indices)) > 1
-            or len(channel_indices) == len(volumes)
-            and len(set(channel_indices)) > 1
+    time_indices = [volume.data.time for volume in volumes if volume.data.time is not None]
+    channel_indices = [volume.data.channel for volume in volumes if volume.data.channel is not None]
+    needs_wrapper = (
+        len(time_indices) == len(volumes)
+        and len(set(time_indices)) > 1
+        or len(channel_indices) == len(volumes)
+        and len(set(channel_indices)) > 1
+    )
+
+    if needs_wrapper:
+        for volume in volumes:
+            if volume.display:
+                volume.update_drawings()
+        _remove_from_volume_update_manager(session, volumes)
+        model.remove_drawings(volumes, delete=False)
+        model = _wrap_scale_hierarchies(name, volumes, scales, session)
+
+    return model, volumes
+
+
+def _hide_volumes(model) -> None:
+    for child in model.all_models():
+        if isinstance(child, Volume):
+            child.display = False
+
+
+def _standalone_label_model(session, label_group, scales, name, initial_step):
+    model, _ = _prepare_image_model(session, label_group, scales, name, initial_step)
+    _hide_volumes(model)
+    return model
+
+
+def _label_model(
+    session,
+    label_group,
+    label_path,
+    label_metadata,
+    source_group,
+    source_metadata,
+    source_volumes,
+    scales,
+    initial_step,
+):
+    bridge = build_label_bridge(
+        session,
+        label_group,
+        label_path,
+        label_metadata,
+        source_group,
+        source_metadata,
+        source_volumes,
+        (1, 1, 1) if scales is not None else initial_step,
+    )
+    label_name = label_metadata.multiscales.name or label_path.rsplit("/", 1)[-1]
+    model = Model(label_name, session)
+    index_model = _wrap_scale_hierarchies(f"{label_name} index maps", bridge.index_volumes, scales, session)
+    if index_model is not None:
+        _hide_volumes(index_model)
+        model.add([index_model])
+    if bridge.segmentations:
+        editable = Model(f"{label_name} editable segmentations", session)
+        editable.add(bridge.segmentations)
+        model.add([editable])
+    else:
+        _warning(
+            session,
+            "OME-Zarr label image '{}' declares no nonzero label IDs in colors or properties; "
+            "opened its index map without editable ChimeraX segmentations.",
+            label_path,
         )
+    return model
 
-        if needs_wrapper:
-            # Force initial rendering before reparenting to prevent KeyError issues
-            # This follows ChimeraX's pattern in volume.py:3724-3727 where update_drawings()
-            # is called to ensure surfaces/images are created before final model setup
-            for volume in volumes:
-                if volume.display:
-                    volume.update_drawings()
 
-            # Clean up volumes from VolumeUpdateManager after rendering completes
-            # This prevents KeyError when volumes are reparented and their display state changes
-            vm = getattr(session, "_volume_update_manager", None)
-            if vm is not None:
-                for volume in volumes:
-                    # Use discard() to safely remove from tracking sets
-                    vm._volumes_to_update.discard(volume)
-                    vm._displayed_volumes_to_update.discard(volume)
+def _associated_label_groups(source_group: zarr.Group):
+    try:
+        labels_group = source_group["labels"]
+    except KeyError:
+        return []
+    if not isinstance(labels_group, zarr.Group):
+        raise OMEZarrFormatError("The OME-Zarr 'labels' child must be a group.")
+    labels_metadata = parse_labels_metadata(labels_group)
+    groups = []
+    for relative_path in labels_metadata.paths:
+        try:
+            label_group = labels_group[relative_path]
+        except KeyError as error:
+            raise OMEZarrFormatError(f"Registered label path '{relative_path}' does not exist.") from error
+        if not isinstance(label_group, zarr.Group):
+            raise OMEZarrFormatError(f"Registered label path '{relative_path}' is not a group.")
+        groups.append((f"labels/{relative_path}", label_group))
+    return groups
 
-            # Remove volumes from ZarrModel without deleting them
-            # (The model was never added to session, so just detach the volumes)
-            model.remove_drawings(volumes, delete=False)
 
-            scale_groups = {}
-            for volume in volumes:
-                scale_groups.setdefault(getattr(volume.data, "scale_path", None), []).append(volume)
+def _attach_labels(
+    session,
+    name,
+    source_model,
+    source_group,
+    source_volumes,
+    label_groups,
+    scales,
+    initial_step,
+):
+    source_metadata = parse_ome_zarr_metadata(source_group)
+    label_models = []
+    for label_path, label_group in label_groups:
+        try:
+            label_metadata = parse_ome_zarr_metadata(label_group)
+            if label_metadata.image_label is None:
+                raise OMEZarrFormatError(f"Registered label path '{label_path}' has no image-label metadata.")
+        except OMEZarrFormatError as error:
+            _warning(session, "Skipping OME-Zarr label image '{}': {}", label_path, error)
+            continue
 
-            if len(scale_groups) == 1:
-                model = _wrap_time_and_channels(name, volumes, session)
-            else:
-                # Preserve one independent time/channel hierarchy per explicitly opened scale.
-                wrappers = []
-                ordered_scales = scales or list(scale_groups)
-                for scale in ordered_scales:
-                    scale_volumes = scale_groups.get(scale, [])
-                    if scale_volumes:
-                        wrappers.append(_wrap_time_and_channels(f"{name} - {scale}", scale_volumes, session))
-                model.add(wrappers)
+        try:
+            label_model = _label_model(
+                session,
+                label_group,
+                label_path,
+                label_metadata,
+                source_group,
+                source_metadata,
+                source_volumes,
+                scales,
+                initial_step,
+            )
+        except OMEZarrFormatError as error:
+            _warning(
+                session,
+                "Could not associate OME-Zarr label image '{}' with its source: {} "
+                "Opening a standalone, read-only index map instead.",
+                label_path,
+                error,
+            )
+            label_model = _standalone_label_model(session, label_group, scales, label_path, initial_step)
+        label_models.append(label_model)
+
+    if not label_models:
+        return source_model
+    dataset = Model(name, session)
+    labels_container = Model("labels", session)
+    labels_container.add(label_models)
+    dataset.add([source_model, labels_container])
+    return dataset
+
+
+def _resolve_relative_group_path(group_path: str, relative_path: str) -> str:
+    return posixpath.normpath(posixpath.join(group_path, relative_path))
+
+
+def _open_source_with_label_groups(
+    session,
+    source_group,
+    source_name,
+    label_groups,
+    scales,
+    initial_step,
+):
+    source_model, source_volumes = _prepare_image_model(
+        session,
+        source_group,
+        scales,
+        source_name,
+        initial_step,
+    )
+    return _attach_labels(
+        session,
+        source_name,
+        source_model,
+        source_group,
+        source_volumes,
+        label_groups,
+        scales,
+        initial_step,
+    )
+
+
+def _open_direct_label(
+    session,
+    label_group,
+    label_path,
+    filesystem,
+    scales,
+    initial_step,
+):
+    label_metadata = parse_ome_zarr_metadata(label_group)
+    label_name = os.path.basename(label_path.rstrip("/")) or "label"
+    if filesystem is None or label_metadata.image_label is None:
+        _warning(
+            session,
+            "Could not resolve a source image for OME-Zarr label '{}'; opened a standalone index map.",
+            label_path,
+        )
+        return _standalone_label_model(session, label_group, scales, label_name, initial_step)
+
+    source_path = _resolve_relative_group_path(label_path, label_metadata.image_label.source_image)
+    if source_path == posixpath.normpath(label_path):
+        raise OMEZarrFormatError(f"OME-Zarr label '{label_path}' refers to itself as its source image.")
+    try:
+        source_group = _open_group(_store_from_filesystem(filesystem, source_path))
+        if ome_zarr_group_kind(source_group) != "image":
+            raise OMEZarrFormatError(f"Referenced source '{source_path}' is not an OME-Zarr image group.")
+    except Exception as error:
+        _warning(
+            session,
+            "Could not open source image '{}' for OME-Zarr label '{}': {}. Opened a standalone index map instead.",
+            source_path,
+            label_path,
+            error,
+        )
+        return _standalone_label_model(session, label_group, scales, label_name, initial_step)
+
+    source_name = os.path.basename(source_path.rstrip("/")) or "image"
+    return _open_source_with_label_groups(
+        session,
+        source_group,
+        source_name,
+        [(label_path, label_group)],
+        scales,
+        initial_step,
+    )
+
+
+def _open_labels_collection(
+    session,
+    labels_group,
+    labels_path,
+    filesystem,
+    scales,
+    initial_step,
+):
+    labels_metadata = parse_labels_metadata(labels_group)
+    models = []
+    for relative_path in labels_metadata.paths:
+        label_group = labels_group[relative_path]
+        label_path = posixpath.join(labels_path, relative_path)
+        models.append(
+            _open_direct_label(
+                session,
+                label_group,
+                label_path,
+                filesystem,
+                scales,
+                initial_step,
+            ),
+        )
+    if len(models) == 1:
+        return models[0]
+    container = Model(os.path.basename(labels_path.rstrip("/")) or "labels", session)
+    container.add(models)
+    return container
+
+
+def _open(
+    session: Session,
+    root,
+    scales: Optional[List[str]],
+    full_name: str = "",
+    name: str = "",
+    initial_step: Tuple[int, int, int] = (4, 4, 4),
+    labels: bool = True,
+    filesystem: Optional[AbstractFileSystem] = None,
+) -> Tuple[List[Model], str]:
+    group = _open_group(root)
+    kind = ome_zarr_group_kind(group)
+    if kind == "image":
+        source_model, source_volumes = _prepare_image_model(session, group, scales, name, initial_step)
+        model = source_model
+        if labels:
+            try:
+                label_groups = _associated_label_groups(group)
+            except OMEZarrFormatError as error:
+                _warning(session, "Could not read associated OME-Zarr labels: {}", error)
+                label_groups = []
+            model = _attach_labels(
+                session,
+                name,
+                source_model,
+                group,
+                source_volumes,
+                label_groups,
+                scales,
+                initial_step,
+            )
+    elif kind == "image-label":
+        model = _open_direct_label(session, group, full_name, filesystem, scales, initial_step)
+    elif kind == "labels":
+        model = _open_labels_collection(session, group, full_name, filesystem, scales, initial_step)
+    else:
+        raise OMEZarrFormatError("Opening this OME-Zarr non-image group is not supported.")
 
     show_volume_dialog(session)
     return [model], f"Opened {full_name}."
@@ -130,32 +414,27 @@ def open_ome_zarr(
     session,
     data: List[str],
     scales: List[str] = None,
+    labels: bool = True,
 ) -> Tuple[List[Model], str]:
-    """
-    Open OME-Zarr files from a list of URLs. Will return one ZarrModel per URL, which has one or more Volumes as
-    children.
+    """Open local or remote OME-Zarr images and their associated labels."""
 
-    :param session: ChimeraX session
-    :param data: the list of URLs to open
-    :param scales: if provided, each scale will be opened as a separate child volume. If not provided, the multiscales
-    will be opened as a single volume, accessible through the step setting in the Volume Viewer or the volume command.
-    :return: List of opened models and a string message describing the operation
-    """
     retm = []
     rets = []
-
-    for d in data:
-        fs, d = fsspec.core.url_to_fs(d)
-
-        # The initial store to get sizes and units
-        root = _store_from_filesystem(fs, d)
-        name = os.path.basename(d)
-
-        m, s = _open(session, root, scales, full_name=d, name=name)
-
-        retm += m
-        rets.append(s)
-
+    for location in data:
+        filesystem, path = fsspec.core.url_to_fs(location)
+        root = _store_from_filesystem(filesystem, path)
+        name = os.path.basename(path.rstrip("/"))
+        models, message = _open(
+            session,
+            root,
+            scales,
+            full_name=path,
+            name=name,
+            labels=labels,
+            filesystem=filesystem,
+        )
+        retm.extend(models)
+        rets.append(message)
     return retm, "\n".join(rets)
 
 
@@ -166,22 +445,24 @@ def open_ome_zarr_from_fs(
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     log: bool = True,
+    labels: bool = True,
 ) -> Tuple[List[Model], str]:
     root = _store_from_filesystem(fs, path)
-
     if log:
         from chimerax.core.commands import log_equivalent_command
 
         proto = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
-        log_equivalent_command(session, f"open ngff:{proto}://{path}")
-
+        label_option = "" if labels else " labels false"
+        log_equivalent_command(session, f"open ngff:{proto}://{path}{label_option}")
     return _open(
         session,
         root,
         scales,
         full_name=path,
-        name=os.path.basename(path),
+        name=os.path.basename(path.rstrip("/")),
         initial_step=initial_step,
+        labels=labels,
+        filesystem=fs,
     )
 
 
@@ -191,6 +472,7 @@ def open_ome_zarr_from_store(
     name: str,
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
+    labels: bool = True,
 ) -> Tuple[List[Model], str]:
     return _open(
         session,
@@ -199,4 +481,5 @@ def open_ome_zarr_from_store(
         full_name=name,
         name=name,
         initial_step=initial_step,
+        labels=labels,
     )

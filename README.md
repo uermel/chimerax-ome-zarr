@@ -6,13 +6,15 @@ Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 - 2D and 3D images in YX/ZYX order, with optional leading time and channel axes.
 - Time series, multichannel images, and combined multichannel time series.
 - OMERO channel names, colors, and active state.
+- OME-Zarr label collections and image-label metadata, including colors, properties, and source-image association.
+- Lazy integer index maps for ChimeraX's `segmentation surfaces` / `segmentation colors` commands.
+- Native, editable ChimeraX `Segmentation` models for declared nonzero label values.
 - Local and remote Zarr stores supported by `fsspec`.
 - Scale and translation transformations, converted to ChimeraX Angstrom coordinates.
 - Loading specific resolution levels as separate volumes.
 - Loading an integer-scaled, aligned pyramid as one Volume whose resolution follows ChimeraX's `step` setting.
 
 **Currently not supported:**
-- Labels data.
 - Plates and multi-image collections.
 - More than one `multiscales` entry in an image group.
 - Custom axes or spatial-axis reordering; spatial axes are interpreted positionally as YX or ZYX for CoPick compatibility.
@@ -62,6 +64,19 @@ open ngff:s3://bucket-name/path/to/file.zarr
 ```
 open ngff:s3://bucket-name/path/to/file.zarr scales 1,2
 ```
+
+Associated label images are discovered automatically and opened hidden. Each label image is available as an integer
+index map, while label values declared in OME `colors` or `properties` metadata also appear as editable masks in
+ChimeraX's **Segmentations** tool. To skip associated labels:
+
+```
+open /path/to/file.zarr labels false
+```
+
+Label edits are copy-on-write: they update the in-session index map and sibling masks, but never modify the opened
+OME-Zarr store. Use ChimeraX's existing segmentation save formats to export an edited mask. If a label image does not
+declare its label values, the plugin preserves the complete index map without scanning the finest-resolution array,
+but does not create editable masks automatically. Value 0 is treated as background by the ChimeraX segmentation bridge.
 
 **NOTE:** in order to open files from remote locations other than S3, you may have to install additional python
 packages (e.g. `smbprotocol` for SAMBA shares).

@@ -83,6 +83,33 @@ class OmeroMetadata:
 
 
 @dataclass(frozen=True)
+class LabelValueMetadata:
+    """Display metadata and arbitrary properties for one integer label value."""
+
+    value: int
+    rgba: Optional[Tuple[int, int, int, int]]
+    properties: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ImageLabelMetadata:
+    """Normalized OME image-label metadata."""
+
+    version: Optional[str]
+    source_image: str
+    values: Tuple[LabelValueMetadata, ...]
+
+
+@dataclass(frozen=True)
+class LabelsMetadata:
+    """Paths registered by an OME-Zarr labels collection."""
+
+    zarr_format: int
+    ome_version: str
+    paths: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class OMEZarrMetadata:
     """Normalized metadata independent of the underlying Zarr format."""
 
@@ -90,6 +117,7 @@ class OMEZarrMetadata:
     ome_version: str
     multiscales: Multiscales
     omero: Optional[OmeroMetadata]
+    image_label: Optional[ImageLabelMetadata]
 
 
 def _version_family(version: Any) -> str:
@@ -329,6 +357,102 @@ def _parse_omero(raw_omero: Any) -> Optional[OmeroMetadata]:
     )
 
 
+def _parse_label_value(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise OMEZarrFormatError(f"Every image-label {field} entry must contain an integer 'label-value'.")
+    return int(value)
+
+
+def _parse_image_label(raw_image_label: Any) -> Optional[ImageLabelMetadata]:
+    if raw_image_label is None:
+        return None
+    if not isinstance(raw_image_label, Mapping):
+        raise OMEZarrFormatError("image-label metadata must be an object.")
+
+    colors = {}
+    raw_colors = raw_image_label.get("colors", [])
+    if not isinstance(raw_colors, Sequence) or isinstance(raw_colors, (str, bytes)):
+        raise OMEZarrFormatError("image-label.colors must be a list.")
+    for raw_color in raw_colors:
+        if not isinstance(raw_color, Mapping):
+            raise OMEZarrFormatError("Every image-label color must be an object.")
+        value = _parse_label_value(raw_color.get("label-value"), "color")
+        raw_rgba = raw_color.get("rgba")
+        rgba = None
+        if raw_rgba is not None:
+            if (
+                not isinstance(raw_rgba, Sequence)
+                or isinstance(raw_rgba, (str, bytes))
+                or len(raw_rgba) != 4
+                or any(
+                    isinstance(component, bool) or not isinstance(component, (int, np.integer))
+                    for component in raw_rgba
+                )
+                or any(component < 0 or component > 255 for component in raw_rgba)
+            ):
+                raise OMEZarrFormatError("An image-label rgba value must contain four integers from 0 through 255.")
+            rgba = tuple(int(component) for component in raw_rgba)
+        # OME-Zarr 0.4 explicitly permits tolerant readers to retain the last
+        # duplicate entry. Apply that behavior consistently to both versions.
+        colors[value] = rgba
+
+    properties = {}
+    raw_properties = raw_image_label.get("properties", [])
+    if not isinstance(raw_properties, Sequence) or isinstance(raw_properties, (str, bytes)):
+        raise OMEZarrFormatError("image-label.properties must be a list.")
+    for raw_property in raw_properties:
+        if not isinstance(raw_property, Mapping):
+            raise OMEZarrFormatError("Every image-label property must be an object.")
+        value = _parse_label_value(raw_property.get("label-value"), "property")
+        properties[value] = {key: item for key, item in raw_property.items() if key != "label-value"}
+
+    values = tuple(
+        LabelValueMetadata(value=value, rgba=colors.get(value), properties=properties.get(value, {}))
+        for value in sorted(set(colors) | set(properties))
+    )
+    raw_source = raw_image_label.get("source", {})
+    if not isinstance(raw_source, Mapping):
+        raise OMEZarrFormatError("image-label.source must be an object.")
+    source_image = raw_source.get("image", "../../")
+    if not isinstance(source_image, str) or not source_image or source_image.startswith("/"):
+        raise OMEZarrFormatError("image-label.source.image must be a non-empty relative path.")
+
+    return ImageLabelMetadata(
+        version=raw_image_label.get("version"),
+        source_image=source_image,
+        values=values,
+    )
+
+
+def ome_zarr_group_kind(group: zarr.Group) -> str:
+    """Return ``image``, ``image-label``, ``labels``, or ``other`` for a group."""
+
+    _, _, namespace = _metadata_namespace(group)
+    if "multiscales" in namespace:
+        return "image-label" if "image-label" in namespace else "image"
+    if "labels" in namespace:
+        return "labels"
+    return "other"
+
+
+def parse_labels_metadata(group: zarr.Group) -> LabelsMetadata:
+    """Parse a labels collection without listing its backing store."""
+
+    zarr_format, ome_version, namespace = _metadata_namespace(group)
+    raw_paths = namespace.get("labels")
+    if not isinstance(raw_paths, Sequence) or isinstance(raw_paths, (str, bytes)):
+        raise OMEZarrFormatError("labels metadata must be a list of relative paths.")
+    paths = []
+    for path in raw_paths:
+        if not isinstance(path, str) or not path or path.startswith("/"):
+            raise OMEZarrFormatError("Every labels entry must be a non-empty relative path.")
+        parts = path.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise OMEZarrFormatError(f"Label path '{path}' is not a normalized child path.")
+        paths.append(path)
+    return LabelsMetadata(zarr_format=zarr_format, ome_version=ome_version, paths=tuple(paths))
+
+
 def parse_ome_zarr_metadata(group: zarr.Group) -> OMEZarrMetadata:
     """Parse one supported OME-Zarr image group into a version-neutral model."""
 
@@ -346,9 +470,6 @@ def parse_ome_zarr_metadata(group: zarr.Group) -> OMEZarrMetadata:
         raise OMEZarrFormatError(
             f"Exactly one multiscales entry is supported; found {len(raw_multiscales)}.",
         )
-    if "labels" in namespace or "labels" in group:
-        raise OMEZarrFormatError("OME-Zarr label images are not supported.")
-
     raw_multiscale = raw_multiscales[0]
     if not isinstance(raw_multiscale, Mapping):
         raise OMEZarrFormatError("The multiscales entry must be an object.")
@@ -373,6 +494,15 @@ def parse_ome_zarr_metadata(group: zarr.Group) -> OMEZarrMetadata:
         raise OMEZarrFormatError("multiscales.datasets must be a non-empty list.")
 
     datasets = []
+    image_label = _parse_image_label(namespace.get("image-label"))
+    if (
+        image_label is not None
+        and image_label.version is not None
+        and _version_family(image_label.version) != ome_version
+    ):
+        raise OMEZarrFormatError(
+            f"image-label version {image_label.version} does not match OME-Zarr {ome_version}.",
+        )
     nonspatial_indices = tuple(i for i, axis in enumerate(axes) if axis.type != "space")
     previous_spatial_shape = None
     nonspatial_shape = None
@@ -381,6 +511,8 @@ def parse_ome_zarr_metadata(group: zarr.Group) -> OMEZarrMetadata:
             raise OMEZarrFormatError("Every multiscale dataset must contain a string path.")
         path = raw_dataset["path"]
         array = _validate_array(group, path, axes, zarr_format)
+        if image_label is not None and not np.issubdtype(array.dtype, np.integer):
+            raise OMEZarrFormatError(f"Label array '{path}' must use an integer data type, got {array.dtype}.")
         current_nonspatial_shape = tuple(array.shape[i] for i in nonspatial_indices)
         if nonspatial_shape is None:
             nonspatial_shape = current_nonspatial_shape
@@ -414,6 +546,7 @@ def parse_ome_zarr_metadata(group: zarr.Group) -> OMEZarrMetadata:
         ome_version=ome_version,
         multiscales=multiscales,
         omero=_parse_omero(namespace.get("omero")),
+        image_label=image_label,
     )
 
 

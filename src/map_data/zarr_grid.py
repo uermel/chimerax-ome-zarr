@@ -60,6 +60,7 @@ class ZarrGridSlice(GridData):
         time_index: Optional[int] = None,
         channel_index: Optional[int] = None,
         scale_path: Optional[str] = None,
+        scale_index: Optional[int] = None,
     ) -> None:
         if spatial_ndim not in (2, 3):
             raise ValueError(f"Expected two or three spatial dimensions, got {spatial_ndim}.")
@@ -73,6 +74,7 @@ class ZarrGridSlice(GridData):
         self.fixed_indices = tuple(fixed_indices)
         self.spatial_ndim = spatial_ndim
         self.scale_path = scale_path
+        self.scale_index = scale_index
 
         spatial_shape = tuple(array.shape[-spatial_ndim:])
         spatial_origin = tuple(origin if origin is not None else (0.0,) * spatial_ndim)
@@ -214,6 +216,7 @@ class WrappedZarrGrid(GridData):
         self.grids = grids
         self.arrays = arrays
         finest_grid = grids[-1]
+        self.scale_index = None
         GridData.__init__(
             self,
             finest_grid.size,
@@ -341,17 +344,17 @@ class ZarrModel(Model):
         self,
         name: str,
         session,
-        root: zarr.abc.store.Store,
+        root,
         scales: Optional[List[str]] = None,
         initial_step: Tuple[int, ...] = (1, 1, 1),
     ) -> None:
         Model.__init__(self, name, session)
 
-        self._source_store = root
+        self._source_store = root.store if isinstance(root, zarr.Group) else root
         # ChimeraX attaches its shared matrix cache to every GridData used by a
         # Volume. Avoid Zarr 3.1's experimental CacheStore here because that
         # release requires NumPy 1.26, while ChimeraX 1.7 ships NumPy 1.25.
-        self.group = zarr.open_group(store=root, mode="r")
+        self.group = root if isinstance(root, zarr.Group) else zarr.open_group(store=root, mode="r")
         metadata = parse_ome_zarr_metadata(self.group)
         self.ome_zarr_metadata = metadata
         multiscales = metadata.multiscales
@@ -366,12 +369,12 @@ class ZarrModel(Model):
                 )
 
         entries = []
-        for dataset in multiscales.datasets:
+        for scale_index, dataset in enumerate(multiscales.datasets):
             if scales is not None and dataset.path not in scales:
                 continue
             array = self.group[dataset.path]
             step, origin = spatial_transform_angstrom(multiscales, dataset)
-            entries.append((array, dataset, step, origin))
+            entries.append((array, dataset, step, origin, scale_index))
         if not entries:
             raise OMEZarrFormatError("No multiscale resolution level was selected.")
         self.arrays_datasets_sizes = entries
@@ -399,7 +402,7 @@ class ZarrModel(Model):
                 if scales is None:
                     grids = []
                     # WrappedZarrGrid expects coarsest-to-finest ordering.
-                    for array, dataset, step, origin in reversed(entries):
+                    for array, dataset, step, origin, scale_index in reversed(entries):
                         grids.append(
                             ZarrGridSlice(
                                 array,
@@ -411,6 +414,7 @@ class ZarrModel(Model):
                                 time_index=time_index if has_time else None,
                                 channel_index=channel_index if has_channel else None,
                                 scale_path=dataset.path,
+                                scale_index=scale_index,
                             ),
                         )
                     grid = WrappedZarrGrid(grids=grids, name=f"{name} t={time_index} c={channel_index}")
@@ -429,7 +433,7 @@ class ZarrModel(Model):
                     )
                     volumes.append(volume)
                 else:
-                    for array, dataset, step, origin in entries:
+                    for array, dataset, step, origin, scale_index in entries:
                         grid = ZarrGridSlice(
                             array,
                             fixed_indices=fixed_indices,
@@ -440,6 +444,7 @@ class ZarrModel(Model):
                             time_index=time_index if has_time else None,
                             channel_index=channel_index if has_channel else None,
                             scale_path=dataset.path,
+                            scale_index=scale_index,
                         )
                         volume = Volume(session, grid, region=_volume_region(grid, initial_step))
                         volume.set_display_style("image")
