@@ -23,9 +23,11 @@
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": false,
       "bump-patch-for-minor-pre-major": false,
+      "versioning": "prerelease",
+      "prerelease-type": "alpha",
       "draft": false,
       "prerelease": false,
-      "pull-request-footer": "Merging this PR will create a GitHub code release."
+      "pull-request-footer": "Merging this PR will create a GitHub code release. Alpha versions are marked as GitHub prereleases."
     }
   }
 }
