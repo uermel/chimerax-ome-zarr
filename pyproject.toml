@@ -30,6 +30,7 @@ dev = [
     "black",
     "pre-commit",
     "pytest",
+    "pytest-rerunfailures",
     "ruff",
 ]
 
@@ -71,6 +72,10 @@ line-length = 120
 target_version = ['py311']
 
 [tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
 select = [
     "E", "W",  # pycodestyle
     "F",  # pyflakes
@@ -96,14 +101,21 @@ ignore = [
     "DTZ007", # Datetime objects without timezones.
     "DTZ005", # More datetimes without timezones.
 ]
-line-length = 120
-target-version = "py311"
 
-[tool.ruff.isort]
-known-first-party =["common"]
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
 
-[tool.ruff.flake8-quotes]
+[tool.ruff.lint.flake8-quotes]
 docstring-quotes = "double"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers"]
+testpaths = ["tests"]
+markers = [
+    "chimerax: requires a full UCSF ChimeraX installation",
+    "remote: accesses a live OME-Zarr store over HTTPS",
+    "upstream: consumes a pinned upstream OME-NGFF fixture suite",
+]
 
 [tool.mypy]
 show_error_codes = true

@@ -1,3 +1,5 @@
+"""Native ChimeraX integration and reader tests."""
+
 from copy import deepcopy
 
 import fsspec
@@ -14,6 +16,8 @@ from src.map_data.ome_metadata import (
 )
 from src.map_data.zarr_grid import WrappedZarrGrid, ZarrGridSlice, ZarrModel
 from src.open import open_ome_zarr_from_fs, open_ome_zarr_from_store
+
+pytestmark = pytest.mark.chimerax
 
 AXIS_CASES = {
     "yx": (["space", "space"], (6, 8)),

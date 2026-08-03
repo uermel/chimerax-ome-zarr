@@ -1,0 +1,26 @@
+# Validates that the PR title follows Conventional Commits.
+name: conventional-commits
+
+on:
+  pull_request:
+    branches: [main]
+    types:
+      - edited
+      - opened
+      - synchronize
+      - reopened
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  conventional_commit_title:
+    name: Conventional Commit PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: chanzuckerberg/github-actions/.github/actions/conventional-commits@v6.30.1
