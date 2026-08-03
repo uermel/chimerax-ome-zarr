@@ -26,12 +26,15 @@
     <p><a><b><a href="https://ngff.openmicroscopy.org/latest/">OME-Zarr</a></b> is a next generation file format
         specification for storing bioimaging data on the cloud.</a></p>
 
-    <p><a>This plugin provides limited support for OME-Zarr files in ChimeraX.</a></p>
+    <p><a>This plugin opens OME-Zarr 0.4 (Zarr v2) and OME-Zarr 0.5 (Zarr v3) images in ChimeraX.</a></p>
 
     <p><a><b>Currently supported:</b></a></p>
     <ul>
-        <li>ZYX-order multiscale volumes.</li>
+        <li>YX- and ZYX-order multiscale images with optional leading time and channel axes.</li>
+        <li>OME-Zarr 0.4/Zarr v2 and OME-Zarr 0.5/Zarr v3 storage.</li>
         <li>Opening local or remote zarr files.</li>
+        <li>Scale and translation transformations in physical units.</li>
+        <li>OMERO channel names, colors, and active state.</li>
         <li>Loading specific multiscales as volumes (streamed on demand and cached in memory).</li>
         <li>Loading all multiscales as a single Volume, accessible using Chimerax's <b>step setting</b>.</li>
     </ul>
@@ -39,12 +42,10 @@
     <p><a><b>Currently not (yet) supported: </b></a></p>
     <ul>
         <li>Labels data.</li>
-        <li>Channel axes.</li>
-        <li>Time axes.</li>
-        <li>non-integer scaling.</li>
-        <li>translation transformations.</li>
-        <li>2D data.</li>
-        <li>multi-image files.</li>
+        <li>Plates, multi-image files, or multiple multiscales entries.</li>
+        <li>Custom axes or spatial-axis reordering.</li>
+        <li>Non-integer pyramid scaling.</li>
+        <li>Automatic switching between translated levels that do not align to the finest grid.</li>
     </ul>
 
     <ul class="none" style="list-style: none;">

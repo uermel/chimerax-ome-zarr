@@ -5,13 +5,59 @@ from typing import List, Tuple
 
 import fsspec
 import zarr
-import zarr.attrs
 from chimerax.core.models import Model
 from chimerax.core.session import Session
 from chimerax.map.volume import show_volume_dialog
 from fsspec import AbstractFileSystem
 
 from .map_data.zarr_grid import ZarrModel
+
+
+def _store_from_filesystem(fs: AbstractFileSystem, path: str):
+    """Create a read-only Zarr-Python 3 store from an existing fsspec filesystem."""
+
+    mapper = fs.get_mapper(path)
+    return zarr.storage.FsspecStore.from_mapper(mapper, read_only=True)
+
+
+def _wrap_time_and_channels(name: str, volumes, session):
+    """Build the ChimeraX model appropriate for one resolution level."""
+
+    time_values = [volume.data.time for volume in volumes if volume.data.time is not None]
+    channel_values = [volume.data.channel for volume in volumes if volume.data.channel is not None]
+    is_time_series = len(time_values) == len(volumes) and len(set(time_values)) > 1
+    is_multichannel = len(channel_values) == len(volumes) and len(set(channel_values)) > 1
+
+    if is_time_series and is_multichannel:
+        from chimerax.map.volume import MultiChannelSeries
+        from chimerax.map_series import MapSeries
+
+        original_display = {volume: volume.display for volume in volumes}
+        channel_groups = {}
+        for volume in volumes:
+            channel_groups.setdefault(volume.data.channel, []).append(volume)
+
+        map_series = []
+        for channel in sorted(channel_groups):
+            channel_volumes = sorted(channel_groups[channel], key=lambda volume: volume.data.time)
+            series = MapSeries(f"{name} channel {channel}", channel_volumes, session)
+            for volume in channel_volumes:
+                volume.display = original_display[volume]
+            series.set_maps(channel_volumes)
+            map_series.append(series)
+        return MultiChannelSeries(name, map_series, session)
+
+    if is_time_series:
+        from chimerax.map_series import MapSeries
+
+        return MapSeries(name, sorted(volumes, key=lambda volume: volume.data.time), session)
+
+    if is_multichannel:
+        from chimerax.map.volume import MapChannelsModel
+
+        return MapChannelsModel(name, sorted(volumes, key=lambda volume: volume.data.channel), session)
+
+    return volumes[0] if len(volumes) == 1 else None
 
 
 def _open(
@@ -27,72 +73,54 @@ def _open(
 
     model = ZarrModel(name, session, root, scales, initial_step)
 
-    # Check if we have time/channel volumes that need to be wrapped
+    # Check if we have time/channel volumes that need to be wrapped.
     volumes = list(model.child_models())
-    if len(volumes) > 0 and hasattr(volumes[0], "data"):
-        # Check for time series and/or multichannel data
-        time_indices = [v.data.time for v in volumes if hasattr(v.data, "time") and v.data.time is not None]
-        channel_indices = [v.data.channel for v in volumes if hasattr(v.data, "channel") and v.data.channel is not None]
+    if volumes and hasattr(volumes[0], "data"):
+        time_indices = [volume.data.time for volume in volumes if volume.data.time is not None]
+        channel_indices = [volume.data.channel for volume in volumes if volume.data.channel is not None]
+        needs_wrapper = (
+            len(time_indices) == len(volumes)
+            and len(set(time_indices)) > 1
+            or len(channel_indices) == len(volumes)
+            and len(set(channel_indices)) > 1
+        )
 
-        is_time_series = len(time_indices) == len(volumes) and len(set(time_indices)) > 1
-        is_multichannel = len(channel_indices) == len(volumes) and len(set(channel_indices)) > 1
-
-        if is_time_series or is_multichannel:
+        if needs_wrapper:
             # Force initial rendering before reparenting to prevent KeyError issues
             # This follows ChimeraX's pattern in volume.py:3724-3727 where update_drawings()
             # is called to ensure surfaces/images are created before final model setup
-            for v in volumes:
-                if v.display:
-                    v.update_drawings()
+            for volume in volumes:
+                if volume.display:
+                    volume.update_drawings()
 
             # Clean up volumes from VolumeUpdateManager after rendering completes
             # This prevents KeyError when volumes are reparented and their display state changes
             vm = getattr(session, "_volume_update_manager", None)
             if vm is not None:
-                for v in volumes:
+                for volume in volumes:
                     # Use discard() to safely remove from tracking sets
-                    vm._volumes_to_update.discard(v)
-                    vm._displayed_volumes_to_update.discard(v)
+                    vm._volumes_to_update.discard(volume)
+                    vm._displayed_volumes_to_update.discard(volume)
 
             # Remove volumes from ZarrModel without deleting them
             # (The model was never added to session, so just detach the volumes)
             model.remove_drawings(volumes, delete=False)
 
-            # Create appropriate wrapper model
-            if is_time_series and is_multichannel:
-                # Both time and channel dimensions
-                from chimerax.map.volume import MultiChannelSeries
-                from chimerax.map_series import MapSeries
+            scale_groups = {}
+            for volume in volumes:
+                scale_groups.setdefault(getattr(volume.data, "scale_path", None), []).append(volume)
 
-                # Group volumes by channel
-                channel_groups = {}
-                for v in volumes:
-                    c = v.data.channel
-                    if c not in channel_groups:
-                        channel_groups[c] = []
-                    channel_groups[c].append(v)
-
-                # Create MapSeries for each channel
-                map_series = []
-                for c in sorted(channel_groups.keys()):
-                    ms = MapSeries(f"{name} channel {c}", channel_groups[c], session)
-                    map_series.append(ms)
-
-                # Create MultiChannelSeries
-                model = MultiChannelSeries(name, map_series, session)
-
-            elif is_time_series:
-                # Time dimension only
-                from chimerax.map_series import MapSeries
-
-                model = MapSeries(name, volumes, session)
-
-            elif is_multichannel:
-                # Channel dimension only
-                from chimerax.map.volume import MapChannelsModel
-
-                model = MapChannelsModel(name, volumes, session)
-                model.show_n_channels(len(volumes))  # Show all channels as requested
+            if len(scale_groups) == 1:
+                model = _wrap_time_and_channels(name, volumes, session)
+            else:
+                # Preserve one independent time/channel hierarchy per explicitly opened scale.
+                wrappers = []
+                ordered_scales = scales or list(scale_groups)
+                for scale in ordered_scales:
+                    scale_volumes = scale_groups.get(scale, [])
+                    if scale_volumes:
+                        wrappers.append(_wrap_time_and_channels(f"{name} - {scale}", scale_volumes, session))
+                model.add(wrappers)
 
     show_volume_dialog(session)
     return [model], f"Opened {full_name}."
@@ -120,7 +148,7 @@ def open_ome_zarr(
         fs, d = fsspec.core.url_to_fs(d)
 
         # The initial store to get sizes and units
-        root = zarr.storage.FSStore(d, key_separator="/", mode="r", dimension_separator="/", fs=fs)
+        root = _store_from_filesystem(fs, d)
         name = os.path.basename(d)
 
         m, s = _open(session, root, scales, full_name=d, name=name)
@@ -139,7 +167,7 @@ def open_ome_zarr_from_fs(
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     log: bool = True,
 ) -> Tuple[List[Model], str]:
-    root = zarr.storage.FSStore(path, key_separator="/", mode="r", dimension_separator="/", fs=fs)
+    root = _store_from_filesystem(fs, path)
 
     if log:
         from chimerax.core.commands import log_equivalent_command
@@ -159,7 +187,7 @@ def open_ome_zarr_from_fs(
 
 def open_ome_zarr_from_store(
     session,
-    root: zarr.storage,
+    root: zarr.abc.store.Store,
     name: str,
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
