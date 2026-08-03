@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "changelog-sections": [
+    { "type": "feat", "section": "✨ Features" },
+    { "type": "fix", "section": "🐞 Bug Fixes" },
+    { "type": "perf", "section": "⚡️ Performance Improvements" },
+    { "type": "revert", "section": "↩️ Reverts" },
+    { "type": "docs", "section": "📝 Documentation" },
+    { "type": "style", "section": "💅 Styles" },
+    { "type": "chore", "section": "🧹 Miscellaneous Chores" },
+    { "type": "refactor", "section": "♻️ Code Refactoring" },
+    { "type": "test", "section": "🧪 Tests" },
+    { "type": "build", "section": "🛠️ Build System" },
+    { "type": "ci", "section": "⚙ Continuous Integration" }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "ChimeraX-OME-Zarr",
+      "release-type": "python",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "separate-pull-requests": true,
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": false,
+      "bump-patch-for-minor-pre-major": false,
+      "draft": false,
+      "prerelease": false,
+      "pull-request-footer": "Merging this PR will create a GitHub code release."
+    }
+  }
+}
