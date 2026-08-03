@@ -14,6 +14,7 @@ Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 - Identity, scale, and translation transformations, converted to ChimeraX Angstrom coordinates.
 - Loading specific resolution levels as separate volumes.
 - Loading an integer-scaled, aligned pyramid as one Volume whose resolution follows ChimeraX's `step` setting.
+- Adaptive decoded read-ahead for smoother first-pass playback of 3D time series.
 
 **Currently not supported:**
 - Plates and multi-image collection formats other than `bioformats2raw.layout`.
@@ -65,6 +66,19 @@ open ngff:s3://bucket-name/path/to/file.zarr
 ```
 open ngff:s3://bucket-name/path/to/file.zarr scales 1,2
 ```
+
+For 3D time series, the plugin uses idle time after a frame is drawn to preload future timepoints at the same region,
+sampling step, channel, and resolution level. By default it fills an adaptive, memory-bounded buffer. To limit the
+buffer to a fixed number of future timepoints, or disable temporal read-ahead entirely:
+
+```
+open ngff:https://example.org/image.zarr readAhead 3
+open ngff:https://example.org/image.zarr readAhead 0
+```
+
+Read-ahead is best-effort: ChimeraX's built-in Map Series widget continues playing normally and waits for an
+unbuffered frame if playback catches the network. This decoded-data buffer is independent of the `vseries`
+`cacheFrames` rendering cache. Plane display continues to use chunk-aligned spatial caching without temporal reads.
 
 Associated label images are discovered automatically and opened hidden. Each label image is available as an integer
 index map, while label values declared in OME `colors` or `properties` metadata also appear as editable masks in

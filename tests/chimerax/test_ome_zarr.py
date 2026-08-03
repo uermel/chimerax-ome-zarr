@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import zarr
 
+from src.info import NGFFFetcherInfo, OMEZarrOpenerInfo
 from src.map_data.ome_metadata import (
     OMEZarrFormatError,
     bioformats2raw_series_paths,
@@ -15,6 +16,7 @@ from src.map_data.ome_metadata import (
     parse_ome_zarr_metadata,
     spatial_transform_angstrom,
 )
+from src.map_data.temporal_cache import TemporalReadAheadManager
 from src.map_data.zarr_grid import WrappedZarrGrid, ZarrGridSlice, ZarrModel
 from src.open import open_ome_zarr_from_fs, open_ome_zarr_from_store
 
@@ -466,6 +468,113 @@ def test_plane_read_ahead_clamps_step_aligned_plane_past_upper_boundary():
     matrix = wrapped.matrix((0, 0, 500), (928, 928, 1), (4, 4, 4))
 
     assert matrix.shape == (1, 232, 232)
+
+
+def test_temporal_read_ahead_promotes_decoded_matrix_to_chimerax_cache():
+    from chimerax.map_data.datacache import Data_Cache
+
+    group, data = _make_image(3, ["time", "space", "space", "space"], (3, 4, 6, 8))
+
+    class CountingGrid(ZarrGridSlice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.read_count = 0
+
+        def read_matrix(self, ijk_origin=(0, 0, 0), ijk_size=None, ijk_step=(1, 1, 1), progress=None):
+            self.read_count += 1
+            return super().read_matrix(ijk_origin, ijk_size, ijk_step, progress)
+
+    grids = [CountingGrid(group["0"], fixed_indices=(time,), spatial_ndim=3, time_index=time) for time in range(3)]
+    cache = Data_Cache(1024**2)
+    for grid in grids:
+        grid.data_cache = cache
+    manager = TemporalReadAheadManager(1024**2)
+    sequence = manager.create_sequence(grids)
+    for index, grid in enumerate(grids):
+        grid.set_temporal_read_ahead(sequence, index)
+
+    current = grids[0].matrix((0, 0, 0), grids[0].size, (1, 1, 1))
+    manager.flush()
+
+    assert manager.wait_for_idle()
+    assert grids[1].read_count == 1
+    assert grids[1].cached_data((0, 0, 0), grids[1].size, (1, 1, 1)) is None
+    prefetched = grids[1].matrix((0, 0, 0), grids[1].size, (1, 1, 1))
+    np.testing.assert_array_equal(current, data[0])
+    np.testing.assert_array_equal(prefetched, data[1])
+    assert grids[1].read_count == 1
+    assert grids[1].cached_data((0, 0, 0), grids[1].size, (1, 1, 1)) is prefetched
+    manager.close(wait=True)
+
+
+def test_temporal_read_ahead_ignores_planes_and_cache_only_probes():
+    from chimerax.map_data.datacache import Data_Cache
+
+    group, _ = _make_image(3, ["time", "space", "space", "space"], (2, 4, 6, 8))
+
+    class CountingGrid(ZarrGridSlice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.read_count = 0
+
+        def read_matrix(self, ijk_origin=(0, 0, 0), ijk_size=None, ijk_step=(1, 1, 1), progress=None):
+            self.read_count += 1
+            return super().read_matrix(ijk_origin, ijk_size, ijk_step, progress)
+
+    grids = [CountingGrid(group["0"], fixed_indices=(time,), spatial_ndim=3) for time in range(2)]
+    manager = TemporalReadAheadManager(1024**2)
+    sequence = manager.create_sequence(grids)
+    for index, grid in enumerate(grids):
+        grid.data_cache = Data_Cache(1024**2)
+        grid.set_temporal_read_ahead(sequence, index)
+
+    grids[0].matrix((0, 0, 1), (8, 6, 1), (1, 1, 1))
+    assert grids[0].matrix((0, 0, 0), grids[0].size, (1, 1, 1), from_cache_only=True) is not None
+    manager.flush()
+
+    assert manager.wait_for_idle()
+    assert grids[1].read_count == 0
+    assert manager.reserved_bytes == 0
+    manager.close(wait=True)
+
+
+def test_zarr_model_configures_adaptive_or_disabled_temporal_read_ahead():
+    from chimerax.core.session import Session
+
+    group, _ = _make_image(3, ["time", "channel", "space", "space", "space"], (3, 2, 4, 6, 8))
+    adaptive_session = Session("OME-Zarr adaptive read-ahead test", offscreen_rendering=True)
+    adaptive = ZarrModel("adaptive", adaptive_session, group.store)
+    adaptive_levels = [level for volume in adaptive.child_models() for level in volume.data.grids]
+
+    assert len(adaptive_levels) == 6
+    assert all(level._temporal_read_ahead is not None for level in adaptive_levels)
+    assert hasattr(adaptive_session, "_ome_zarr_temporal_read_ahead")
+    current = next(level for level in adaptive_levels if level.time == 0 and level.channel == 0)
+    following = next(level for level in adaptive_levels if level.time == 1 and level.channel == 0)
+    current.matrix((0, 0, 0), current.size, (1, 1, 1))
+    adaptive_session.triggers.activate_trigger("frame drawn", None)
+    assert adaptive_session._ome_zarr_temporal_read_ahead.wait_for_idle()
+    assert adaptive_session._ome_zarr_temporal_read_ahead.ready_count == 2
+    assert following.matrix((0, 0, 0), following.size, (1, 1, 1)) is not None
+    assert adaptive_session._ome_zarr_temporal_read_ahead.ready_count == 1
+
+    disabled_session = Session("OME-Zarr disabled read-ahead test", offscreen_rendering=True)
+    disabled = ZarrModel("disabled", disabled_session, group.store, read_ahead=0)
+    disabled_levels = [level for volume in disabled.child_models() for level in volume.data.grids]
+
+    assert all(level._temporal_read_ahead is None for level in disabled_levels)
+    assert not hasattr(disabled_session, "_ome_zarr_temporal_read_ahead")
+    with pytest.raises(OMEZarrFormatError, match="nonnegative"):
+        ZarrModel("invalid", disabled_session, group.store, read_ahead=-1)
+
+    adaptive_session._ome_zarr_temporal_read_ahead.close(wait=True)
+
+
+def test_open_and_fetch_providers_expose_nonnegative_read_ahead_option():
+    from chimerax.core.commands import NonNegativeIntArg
+
+    assert OMEZarrOpenerInfo().open_args["read_ahead"] is NonNegativeIntArg
+    assert NGFFFetcherInfo().fetch_args["read_ahead"] is NonNegativeIntArg
 
 
 def test_wrapped_grid_rejects_noninteger_scale_and_misaligned_translation():

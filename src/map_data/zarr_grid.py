@@ -1,6 +1,7 @@
 # vim: set expandtab shiftwidth=4 softtabstop=4:
 
 from contextlib import suppress
+from numbers import Integral
 from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -17,6 +18,7 @@ from .ome_metadata import (
     spatial_transform_angstrom,
 )
 from .store_cache import cached_group
+from .temporal_cache import decoded_matrix_bytes, session_temporal_read_ahead
 
 MAX_DECODED_SLAB_BYTES = 4 * 1024**3
 
@@ -78,6 +80,7 @@ class ZarrGridSlice(GridData):
         self.spatial_ndim = spatial_ndim
         self.scale_path = scale_path
         self.scale_index = scale_index
+        self._temporal_read_ahead = None
 
         spatial_shape = tuple(array.shape[-spatial_ndim:])
         spatial_origin = tuple(origin if origin is not None else (0.0,) * spatial_ndim)
@@ -116,6 +119,35 @@ class ZarrGridSlice(GridData):
     def _decoded_slab_limit(self) -> int:
         cache_size = getattr(self.data_cache, "size", 0)
         return min(MAX_DECODED_SLAB_BYTES, int(cache_size // 4))
+
+    def set_temporal_read_ahead(self, sequence, index: int) -> None:
+        """Associate this resolution grid with its time-adjacent grids."""
+
+        self._temporal_read_ahead = (sequence, index)
+
+    def _is_temporal_volume_request(self, ijk_size, ijk_step) -> bool:
+        if self.spatial_ndim != 3 or self._temporal_read_ahead is None:
+            return False
+        sampled_size = tuple((size + step - 1) // step for size, step in zip(ijk_size, ijk_step, strict=True))
+        return all(size > 1 for size in sampled_size)
+
+    def _consume_temporal_read_ahead(self, ijk_origin, ijk_size, ijk_step):
+        if not self._is_temporal_volume_request(ijk_size, ijk_step):
+            return None
+        sequence, index = self._temporal_read_ahead
+        return sequence.consume(index, ijk_origin, ijk_size, ijk_step)
+
+    def _observe_temporal_request(self, matrix, ijk_origin, ijk_size, ijk_step) -> None:
+        if matrix is None or not self._is_temporal_volume_request(ijk_size, ijk_step):
+            return
+        sequence, index = self._temporal_read_ahead
+        sequence.observe(
+            index,
+            ijk_origin,
+            ijk_size,
+            ijk_step,
+            decoded_matrix_bytes(ijk_size, ijk_step, matrix.dtype.itemsize),
+        )
 
     def _bounded_request(
         self,
@@ -167,7 +199,17 @@ class ZarrGridSlice(GridData):
         ijk_origin, ijk_size = self._bounded_request(ijk_origin, ijk_size)
 
         matrix = self.cached_data(ijk_origin, ijk_size, ijk_step)
-        if matrix is not None or from_cache_only:
+        if matrix is not None:
+            if not from_cache_only:
+                self._observe_temporal_request(matrix, ijk_origin, ijk_size, ijk_step)
+            return matrix
+        if from_cache_only:
+            return None
+
+        matrix = self._consume_temporal_read_ahead(ijk_origin, ijk_size, ijk_step)
+        if matrix is not None:
+            self.cache_data(matrix, ijk_origin, ijk_size, ijk_step)
+            self._observe_temporal_request(matrix, ijk_origin, ijk_size, ijk_step)
             return matrix
 
         slab_origin, slab_size = self._chunk_aligned_plane_region(ijk_origin, ijk_size)
@@ -184,7 +226,9 @@ class ZarrGridSlice(GridData):
             )
             return self.matrix_slice(slab, relative_origin, ijk_size, ijk_step)
 
-        return super().matrix(ijk_origin, ijk_size, ijk_step, progress)
+        matrix = super().matrix(ijk_origin, ijk_size, ijk_step, progress)
+        self._observe_temporal_request(matrix, ijk_origin, ijk_size, ijk_step)
+        return matrix
 
     def read_matrix(
         self,
@@ -463,8 +507,13 @@ class ZarrModel(Model):
         root,
         scales: Optional[List[str]] = None,
         initial_step: Tuple[int, ...] = (1, 1, 1),
+        read_ahead: Optional[int] = None,
     ) -> None:
         Model.__init__(self, name, session)
+
+        if read_ahead is not None and (not isinstance(read_ahead, Integral) or read_ahead < 0):
+            raise OMEZarrFormatError(f"readAhead must be a nonnegative integer, got {read_ahead!r}.")
+        read_ahead = None if read_ahead is None else int(read_ahead)
 
         self.group = cached_group(session, root)
         self._source_store = self.group.store
@@ -504,6 +553,7 @@ class ZarrModel(Model):
         initial_step = tuple(initial_step or ((4, 4, 4) if scales is None else (1, 1, 1)))
 
         volumes = []
+        temporal_levels = {}
         for time_index in range(time_count):
             for channel_index in range(channel_count):
                 fixed_indices = []
@@ -529,6 +579,9 @@ class ZarrModel(Model):
                                 scale_path=dataset.path,
                                 scale_index=scale_index,
                             ),
+                        )
+                        temporal_levels.setdefault((channel_index, scale_index), []).append(
+                            (time_index, grids[-1]),
                         )
                     grid = WrappedZarrGrid(grids=grids, name=f"{name} t={time_index} c={channel_index}")
                     grid.scale_path = None
@@ -560,6 +613,7 @@ class ZarrModel(Model):
                             scale_path=dataset.path,
                             scale_index=scale_index,
                         )
+                        temporal_levels.setdefault((channel_index, scale_index), []).append((time_index, grid))
                         set_data_cache(grid, session)
                         volume = Volume(session, grid, region=_volume_region(grid, initial_step))
                         volume.set_display_style("image")
@@ -575,6 +629,14 @@ class ZarrModel(Model):
                             scale_path=dataset.path,
                         )
                         volumes.append(volume)
+
+        if has_time and time_count > 1 and read_ahead != 0:
+            manager = session_temporal_read_ahead(session)
+            for indexed_grids in temporal_levels.values():
+                grids = [grid for _, grid in sorted(indexed_grids)]
+                sequence = manager.create_sequence(grids, read_ahead)
+                for index, grid in enumerate(grids):
+                    grid.set_temporal_read_ahead(sequence, index)
 
         self.add(volumes)
 

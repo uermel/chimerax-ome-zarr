@@ -111,11 +111,12 @@ def _prepare_image_model(
     scales: Optional[List[str]],
     name: str,
     initial_step: Tuple[int, int, int],
+    read_ahead: Optional[int],
 ):
     if scales is not None:
         initial_step = (1, 1, 1)
 
-    model = ZarrModel(name, session, group, scales, initial_step)
+    model = ZarrModel(name, session, group, scales, initial_step, read_ahead)
     volumes = list(model.child_models())
     time_indices = [volume.data.time for volume in volumes if volume.data.time is not None]
     channel_indices = [volume.data.channel for volume in volumes if volume.data.channel is not None]
@@ -143,8 +144,8 @@ def _hide_volumes(model) -> None:
             child.display = False
 
 
-def _standalone_label_model(session, label_group, scales, name, initial_step):
-    model, _ = _prepare_image_model(session, label_group, scales, name, initial_step)
+def _standalone_label_model(session, label_group, scales, name, initial_step, read_ahead):
+    model, _ = _prepare_image_model(session, label_group, scales, name, initial_step, read_ahead)
     _hide_volumes(model)
     return model
 
@@ -159,6 +160,7 @@ def _label_model(
     source_volumes,
     scales,
     initial_step,
+    read_ahead,
 ):
     bridge = build_label_bridge(
         session,
@@ -219,6 +221,7 @@ def _attach_labels(
     label_groups,
     scales,
     initial_step,
+    read_ahead,
 ):
     source_metadata = parse_ome_zarr_metadata(source_group)
     label_models = []
@@ -242,6 +245,7 @@ def _attach_labels(
                 source_volumes,
                 scales,
                 initial_step,
+                read_ahead,
             )
         except OMEZarrFormatError as error:
             _warning(
@@ -251,7 +255,14 @@ def _attach_labels(
                 label_path,
                 error,
             )
-            label_model = _standalone_label_model(session, label_group, scales, label_path, initial_step)
+            label_model = _standalone_label_model(
+                session,
+                label_group,
+                scales,
+                label_path,
+                initial_step,
+                read_ahead,
+            )
         label_models.append(label_model)
 
     if not label_models:
@@ -274,6 +285,7 @@ def _open_source_with_label_groups(
     label_groups,
     scales,
     initial_step,
+    read_ahead,
 ):
     source_model, source_volumes = _prepare_image_model(
         session,
@@ -281,6 +293,7 @@ def _open_source_with_label_groups(
         scales,
         source_name,
         initial_step,
+        read_ahead,
     )
     return _attach_labels(
         session,
@@ -291,11 +304,19 @@ def _open_source_with_label_groups(
         label_groups,
         scales,
         initial_step,
+        read_ahead,
     )
 
 
-def _open_image_group(session, group, name, scales, initial_step, labels):
-    source_model, source_volumes = _prepare_image_model(session, group, scales, name, initial_step)
+def _open_image_group(session, group, name, scales, initial_step, labels, read_ahead):
+    source_model, source_volumes = _prepare_image_model(
+        session,
+        group,
+        scales,
+        name,
+        initial_step,
+        read_ahead,
+    )
     if not labels:
         return source_model
     try:
@@ -312,10 +333,11 @@ def _open_image_group(session, group, name, scales, initial_step, labels):
         label_groups,
         scales,
         initial_step,
+        read_ahead,
     )
 
 
-def _open_bioformats2raw_collection(session, group, name, scales, initial_step, labels):
+def _open_bioformats2raw_collection(session, group, name, scales, initial_step, labels, read_ahead):
     series_paths = bioformats2raw_series_paths(group)
     series_models = []
     multiple_series = len(series_paths) > 1
@@ -329,6 +351,7 @@ def _open_bioformats2raw_collection(session, group, name, scales, initial_step, 
                 scales,
                 initial_step,
                 labels,
+                read_ahead,
             ),
         )
     if not multiple_series:
@@ -345,6 +368,7 @@ def _open_direct_label(
     filesystem,
     scales,
     initial_step,
+    read_ahead,
 ):
     label_metadata = parse_ome_zarr_metadata(label_group)
     label_name = os.path.basename(label_path.rstrip("/")) or "label"
@@ -354,7 +378,7 @@ def _open_direct_label(
             "Could not resolve a source image for OME-Zarr label '{}'; opened a standalone index map.",
             label_path,
         )
-        return _standalone_label_model(session, label_group, scales, label_name, initial_step)
+        return _standalone_label_model(session, label_group, scales, label_name, initial_step, read_ahead)
 
     source_path = _resolve_relative_group_path(label_path, label_metadata.image_label.source_image)
     if source_path == posixpath.normpath(label_path):
@@ -371,7 +395,7 @@ def _open_direct_label(
             label_path,
             error,
         )
-        return _standalone_label_model(session, label_group, scales, label_name, initial_step)
+        return _standalone_label_model(session, label_group, scales, label_name, initial_step, read_ahead)
 
     source_name = os.path.basename(source_path.rstrip("/")) or "image"
     return _open_source_with_label_groups(
@@ -381,6 +405,7 @@ def _open_direct_label(
         [(label_path, label_group)],
         scales,
         initial_step,
+        read_ahead,
     )
 
 
@@ -391,6 +416,7 @@ def _open_labels_collection(
     filesystem,
     scales,
     initial_step,
+    read_ahead,
 ):
     labels_metadata = parse_labels_metadata(labels_group)
     models = []
@@ -405,6 +431,7 @@ def _open_labels_collection(
                 filesystem,
                 scales,
                 initial_step,
+                read_ahead,
             ),
         )
     if len(models) == 1:
@@ -422,12 +449,13 @@ def _open(
     name: str = "",
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     labels: bool = True,
+    read_ahead: Optional[int] = None,
     filesystem: Optional[AbstractFileSystem] = None,
 ) -> Tuple[List[Model], str]:
     group = _open_group(session, root)
     kind = ome_zarr_group_kind(group)
     if kind == "image":
-        model = _open_image_group(session, group, name, scales, initial_step, labels)
+        model = _open_image_group(session, group, name, scales, initial_step, labels, read_ahead)
     elif kind == "bioformats2raw":
         model = _open_bioformats2raw_collection(
             session,
@@ -436,11 +464,12 @@ def _open(
             scales,
             initial_step,
             labels,
+            read_ahead,
         )
     elif kind == "image-label":
-        model = _open_direct_label(session, group, full_name, filesystem, scales, initial_step)
+        model = _open_direct_label(session, group, full_name, filesystem, scales, initial_step, read_ahead)
     elif kind == "labels":
-        model = _open_labels_collection(session, group, full_name, filesystem, scales, initial_step)
+        model = _open_labels_collection(session, group, full_name, filesystem, scales, initial_step, read_ahead)
     else:
         raise OMEZarrFormatError("Opening this OME-Zarr non-image group is not supported.")
 
@@ -453,6 +482,7 @@ def open_ome_zarr(
     data: List[str],
     scales: List[str] = None,
     labels: bool = True,
+    read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
     """Open local or remote OME-Zarr images and their associated labels."""
 
@@ -469,6 +499,7 @@ def open_ome_zarr(
             full_name=path,
             name=name,
             labels=labels,
+            read_ahead=read_ahead,
             filesystem=filesystem,
         )
         retm.extend(models)
@@ -484,6 +515,7 @@ def open_ome_zarr_from_fs(
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     log: bool = True,
     labels: bool = True,
+    read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
     root = _store_from_filesystem(fs, path)
     if log:
@@ -491,7 +523,8 @@ def open_ome_zarr_from_fs(
 
         proto = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
         label_option = "" if labels else " labels false"
-        log_equivalent_command(session, f"open ngff:{proto}://{path}{label_option}")
+        read_ahead_option = "" if read_ahead is None else f" readAhead {read_ahead}"
+        log_equivalent_command(session, f"open ngff:{proto}://{path}{label_option}{read_ahead_option}")
     return _open(
         session,
         root,
@@ -500,6 +533,7 @@ def open_ome_zarr_from_fs(
         name=os.path.basename(path.rstrip("/")),
         initial_step=initial_step,
         labels=labels,
+        read_ahead=read_ahead,
         filesystem=fs,
     )
 
@@ -511,6 +545,7 @@ def open_ome_zarr_from_store(
     scales: List[str] = None,
     initial_step: Tuple[int, int, int] = (4, 4, 4),
     labels: bool = True,
+    read_ahead: Optional[int] = None,
 ) -> Tuple[List[Model], str]:
     return _open(
         session,
@@ -520,4 +555,5 @@ def open_ome_zarr_from_store(
         name=name,
         initial_step=initial_step,
         labels=labels,
+        read_ahead=read_ahead,
     )

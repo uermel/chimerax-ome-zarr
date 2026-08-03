@@ -30,9 +30,9 @@ class OMEZarrOpenerInfo(OpenerInfo):
 
     @property
     def open_args(self) -> Dict[str, Any]:
-        from chimerax.core.commands import BoolArg, ListOf, StringArg
+        from chimerax.core.commands import BoolArg, ListOf, NonNegativeIntArg, StringArg
 
-        return {"scales": ListOf(StringArg), "labels": BoolArg}
+        return {"scales": ListOf(StringArg), "labels": BoolArg, "read_ahead": NonNegativeIntArg}
 
 
 class NGFFFetcherInfo(FetcherInfo):
@@ -55,6 +55,6 @@ class NGFFFetcherInfo(FetcherInfo):
 
     @property
     def fetch_args(self) -> Dict[str, Any]:
-        from chimerax.core.commands import BoolArg, ListOf, StringArg
+        from chimerax.core.commands import BoolArg, ListOf, NonNegativeIntArg, StringArg
 
-        return {"scales": ListOf(StringArg), "labels": BoolArg}
+        return {"scales": ListOf(StringArg), "labels": BoolArg, "read_ahead": NonNegativeIntArg}
