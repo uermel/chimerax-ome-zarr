@@ -9,6 +9,7 @@ import zarr
 
 from src.map_data.ome_metadata import (
     OMEZarrFormatError,
+    bioformats2raw_series_paths,
     ome_zarr_group_kind,
     parse_labels_metadata,
     parse_ome_zarr_metadata,
@@ -65,10 +66,11 @@ def _make_image(
     omero=None,
     shards=None,
     store=None,
+    path=None,
 ):
     if store is None:
         store = zarr.storage.MemoryStore()
-    group = zarr.create_group(store=store, zarr_format=zarr_format)
+    group = zarr.create_group(store=store, path=path, zarr_format=zarr_format)
     axes = _axes(axis_types)
     names = tuple(axis["name"] for axis in axes)
     data = np.arange(np.prod(shape), dtype=np.uint16).reshape(shape)
@@ -107,6 +109,26 @@ def _make_image(
             ome["omero"] = omero
         group.attrs["ome"] = ome
     return group, data
+
+
+def _make_bioformats2raw_collection(zarr_format, series_paths, *, explicit_series):
+    store = zarr.storage.MemoryStore()
+    root = zarr.create_group(store=store, zarr_format=zarr_format)
+    if zarr_format == 2:
+        root.attrs["bioformats2raw.layout"] = 3
+    else:
+        root.attrs["ome"] = {"version": "0.5", "bioformats2raw.layout": 3}
+
+    if explicit_series:
+        ome_group = root.create_group("OME")
+        if zarr_format == 2:
+            ome_group.attrs["series"] = series_paths
+        else:
+            ome_group.attrs["ome"] = {"version": "0.5", "series": series_paths}
+
+    for path in series_paths:
+        _make_image(zarr_format, ["space", "space", "space"], (4, 6, 8), store=store, path=path)
+    return root
 
 
 def _add_label_image(source_group, zarr_format, axis_types, data, *, colors=None, properties=None, name="cells"):
@@ -339,6 +361,113 @@ def test_wrapped_grid_uses_aligned_coarse_level():
     assert np.all(fine_matrix == 9)
 
 
+def test_wrapped_grid_keeps_chimerax_caches_separate_by_scale():
+    from chimerax.map_data.datacache import Data_Cache
+
+    coarse_group, _ = _make_image(3, ["space", "space", "space"], (2, 3, 4))
+    fine_group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
+    coarse_group["0"][:] = 7
+    fine_group["0"][:] = 9
+    coarse = ZarrGridSlice(coarse_group["0"], spatial_ndim=3, step=(2.0, 2.0, 2.0))
+    fine = ZarrGridSlice(fine_group["0"], spatial_ndim=3, step=(1.0, 1.0, 1.0))
+    wrapped = WrappedZarrGrid(grids=[coarse, fine])
+    cache = Data_Cache(1024**2)
+    wrapped.data_cache = cache
+
+    fine_matrix = wrapped.matrix((0, 0, 0), (8, 6, 4), (1, 1, 1))
+    coarse_matrix = wrapped.matrix((0, 0, 0), (8, 6, 4), (2, 2, 2))
+
+    assert coarse.data_cache is fine.data_cache is cache
+    assert np.all(fine_matrix == 9)
+    assert np.all(coarse_matrix == 7)
+
+
+def test_plane_reads_reuse_chunk_aligned_decoded_slab():
+    from chimerax.map_data.datacache import Data_Cache
+
+    group, data = _make_image(3, ["space", "space", "space"], (8, 8, 8))
+
+    class CountingGrid(ZarrGridSlice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.reads = []
+
+        def read_matrix(self, ijk_origin=(0, 0, 0), ijk_size=None, ijk_step=(1, 1, 1), progress=None):
+            self.reads.append((ijk_origin, ijk_size, ijk_step))
+            return super().read_matrix(ijk_origin, ijk_size, ijk_step, progress)
+
+    grid = CountingGrid(group["0"], spatial_ndim=3)
+    grid.data_cache = Data_Cache(1024**2)
+
+    first = grid.matrix((0, 0, 1), (8, 8, 1), (1, 1, 1))
+    adjacent = grid.matrix((0, 0, 2), (8, 8, 1), (1, 1, 1))
+    resampled = grid.matrix((0, 0, 3), (8, 8, 1), (2, 2, 2))
+
+    np.testing.assert_array_equal(first, data[1:2])
+    np.testing.assert_array_equal(adjacent, data[2:3])
+    np.testing.assert_array_equal(resampled, data[3:4:2, ::2, ::2])
+    assert grid.reads == [((0, 0, 0), (8, 8, 4), (1, 1, 1))]
+
+    crossing = grid.matrix((0, 0, 4), (8, 8, 1), (1, 1, 1))
+    np.testing.assert_array_equal(crossing, data[4:5])
+    assert grid.reads[-1] == ((0, 0, 4), (8, 8, 4), (1, 1, 1))
+    assert len(grid.reads) == 2
+
+
+def test_plane_read_ahead_respects_decoded_cache_limit():
+    from chimerax.map_data.datacache import Data_Cache
+
+    group, data = _make_image(3, ["space", "space", "space"], (8, 8, 8))
+
+    class CountingGrid(ZarrGridSlice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.reads = []
+
+        def read_matrix(self, ijk_origin=(0, 0, 0), ijk_size=None, ijk_step=(1, 1, 1), progress=None):
+            self.reads.append((ijk_origin, ijk_size, ijk_step))
+            return super().read_matrix(ijk_origin, ijk_size, ijk_step, progress)
+
+    grid = CountingGrid(group["0"], spatial_ndim=3)
+    grid.data_cache = Data_Cache(32)
+
+    matrix = grid.matrix((0, 0, 1), (8, 8, 1), (1, 1, 1))
+
+    np.testing.assert_array_equal(matrix, data[1:2])
+    assert grid.reads == [((0, 0, 1), (8, 8, 1), (1, 1, 1))]
+
+
+def test_plane_read_ahead_clamps_step_aligned_plane_past_upper_boundary():
+    """ChimeraX can align a one-plane region to size when size is not step-aligned."""
+
+    from chimerax.map_data.datacache import Data_Cache
+
+    coarse_array = zarr.create_array(
+        store=zarr.storage.MemoryStore(),
+        shape=(125, 232, 232),
+        chunks=(256, 256, 256),
+        dtype=np.float32,
+        zarr_format=2,
+    )
+    fine_array = zarr.create_array(
+        store=zarr.storage.MemoryStore(),
+        shape=(500, 928, 928),
+        chunks=(256, 256, 256),
+        dtype=np.float32,
+        zarr_format=2,
+    )
+    coarse = ZarrGridSlice(coarse_array, spatial_ndim=3, step=(4.0, 4.0, 4.0))
+    fine = ZarrGridSlice(fine_array, spatial_ndim=3)
+    wrapped = WrappedZarrGrid(grids=[coarse, fine])
+    wrapped.data_cache = Data_Cache(1024**3)
+
+    # For size 500 at step 4, ChimeraX's _step_aligned_region maps z=499 to
+    # z=500. The coarse-level request is consequently z=125, one past its end.
+    matrix = wrapped.matrix((0, 0, 500), (928, 928, 1), (4, 4, 4))
+
+    assert matrix.shape == (1, 232, 232)
+
+
 def test_wrapped_grid_rejects_noninteger_scale_and_misaligned_translation():
     group, _ = _make_image(3, ["space", "space", "space"], (4, 6, 8))
     fine = ZarrGridSlice(group["0"], spatial_ndim=3)
@@ -464,6 +593,44 @@ def test_ome_and_zarr_versions_must_match():
 
 
 @pytest.mark.parametrize("zarr_format", [2, 3])
+@pytest.mark.parametrize("explicit_series", [False, True])
+def test_bioformats2raw_collection_discovers_and_opens_every_series(zarr_format, explicit_series):
+    from chimerax.core.session import Session
+    from chimerax.map.volume import Volume
+
+    series_paths = ["images/first", "images/second"] if explicit_series else ["0", "1"]
+    root = _make_bioformats2raw_collection(zarr_format, series_paths, explicit_series=explicit_series)
+    session = Session("OME-Zarr bioformats2raw collection test", offscreen_rendering=True)
+
+    assert ome_zarr_group_kind(root) == "bioformats2raw"
+    assert bioformats2raw_series_paths(root) == tuple(series_paths)
+
+    models, message = open_ome_zarr_from_store(session, root, "collection")
+    session.models.add(models)
+    collection = models[0]
+    volumes = [model for model in collection.all_models() if isinstance(model, Volume)]
+
+    assert message == "Opened collection."
+    assert [model.name for model in collection.child_models()] == [f"collection - {path}" for path in series_paths]
+    assert len(volumes) == 2
+    assert all(volume.data.size == (8, 6, 4) for volume in volumes)
+    session.models.close(models)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_bioformats2raw_collection_rejects_missing_declared_series(zarr_format):
+    root = _make_bioformats2raw_collection(zarr_format, ["0"], explicit_series=True)
+    ome_group = root["OME"]
+    if zarr_format == 2:
+        ome_group.attrs["series"] = ["missing"]
+    else:
+        ome_group.attrs["ome"] = {"version": "0.5", "series": ["missing"]}
+
+    with pytest.raises(OMEZarrFormatError, match="series path 'missing' does not exist"):
+        bioformats2raw_series_paths(root)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
 def test_zarr_model_builds_2d_time_channel_volumes_in_chimerax(zarr_format):
     from chimerax.core.session import Session
 
@@ -476,6 +643,8 @@ def test_zarr_model_builds_2d_time_channel_volumes_in_chimerax(zarr_format):
     volumes = list(model.child_models())
     assert len(volumes) == 6
     assert all(volume.data.size == (8, 6, 1) for volume in volumes)
+    assert all(volume.data.data_cache is not None for volume in volumes)
+    assert all(level.data_cache is volume.data.data_cache for volume in volumes for level in volume.data.grids)
     assert sorted({volume.data.time for volume in volumes}) == [0, 1]
     assert sorted({volume.data.channel for volume in volumes}) == [0, 1, 2]
     session.models.close([model])
@@ -550,7 +719,9 @@ def test_associated_labels_open_as_index_map_and_native_segmentations(zarr_forma
 
     assert len(index_maps) == 1
     assert index_maps[0].display is False
+    assert index_maps[0].data.data_cache is not None
     assert sorted(segmentation.ome_label_value for segmentation in segmentations) == [1, 2]
+    assert all(segmentation.data.data_cache is not None for segmentation in segmentations)
     assert all(segmentation.reference_volume is not None for segmentation in segmentations)
     reference = segmentations[0].reference_volume
     assert set(segmentations) == get_tracker().segmentations_for_volume(reference)
@@ -569,10 +740,12 @@ def test_associated_labels_open_as_index_map_and_native_segmentations(zarr_forma
 
     label_two = next(segmentation for segmentation in segmentations if segmentation.ome_label_value == 2)
     label_one = next(segmentation for segmentation in segmentations if segmentation.ome_label_value == 1)
+    _ = index_maps[0].data.matrix((0, 0, 0), (2, 1, 1), (1, 1, 1))
+    _ = label_one.data.matrix((0, 0, 0), (2, 1, 1), (1, 1, 1))
     label_two.segment(AddVoxel())
 
-    assert index_maps[0].data.read_matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[2, 2]]]
-    assert label_one.data.read_matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[0, 0]]]
+    assert index_maps[0].data.matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[2, 2]]]
+    assert label_one.data.matrix((0, 0, 0), (2, 1, 1), (1, 1, 1)).tolist() == [[[0, 0]]]
     np.testing.assert_array_equal(label_group["0"][:], label_data)
     session.models.close(models)
 

@@ -13,7 +13,8 @@
     <p> OME-Zarr files can be opened with the <b>open</b>-command similar to any other ChimeraX-supported file. When
         appending the "ngff:"-prefix to the URL and including a protocol prefix (such as "s3://" or "smb://") allow
         loading Zarr files from remote storage. OME-Zarr 0.4/Zarr v2 and OME-Zarr 0.5/Zarr v3 images are
-        detected automatically. YX/ZYX images may include leading time and channel axes.
+        detected automatically. YX/ZYX images may include leading time and channel axes. Bioformats2raw layout 3
+        roots are resolved automatically, and all declared or consecutively numbered image series are opened.
 
         When no scales are specified, this command creates lazily loaded multiscale Volumes and chooses a compatible
         resolution from the "step" setting of the volume command or Volume Viewer. When scales are specified, each

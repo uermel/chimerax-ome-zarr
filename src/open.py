@@ -14,10 +14,12 @@ from fsspec import AbstractFileSystem
 from .map_data.labels import build_label_bridge
 from .map_data.ome_metadata import (
     OMEZarrFormatError,
+    bioformats2raw_series_paths,
     ome_zarr_group_kind,
     parse_labels_metadata,
     parse_ome_zarr_metadata,
 )
+from .map_data.store_cache import cached_group
 from .map_data.zarr_grid import ZarrModel
 
 
@@ -33,8 +35,8 @@ def _store_from_filesystem(fs: AbstractFileSystem, path: str):
     return zarr.storage.FsspecStore.from_mapper(mapper, read_only=True)
 
 
-def _open_group(root):
-    return root if isinstance(root, zarr.Group) else zarr.open_group(store=root, mode="r")
+def _open_group(session, root):
+    return cached_group(session, root)
 
 
 def _wrap_time_and_channels(name: str, volumes, session):
@@ -292,6 +294,50 @@ def _open_source_with_label_groups(
     )
 
 
+def _open_image_group(session, group, name, scales, initial_step, labels):
+    source_model, source_volumes = _prepare_image_model(session, group, scales, name, initial_step)
+    if not labels:
+        return source_model
+    try:
+        label_groups = _associated_label_groups(group)
+    except OMEZarrFormatError as error:
+        _warning(session, "Could not read associated OME-Zarr labels: {}", error)
+        label_groups = []
+    return _attach_labels(
+        session,
+        name,
+        source_model,
+        group,
+        source_volumes,
+        label_groups,
+        scales,
+        initial_step,
+    )
+
+
+def _open_bioformats2raw_collection(session, group, name, scales, initial_step, labels):
+    series_paths = bioformats2raw_series_paths(group)
+    series_models = []
+    multiple_series = len(series_paths) > 1
+    for series_path in series_paths:
+        series_name = f"{name} - {series_path}" if multiple_series else name
+        series_models.append(
+            _open_image_group(
+                session,
+                group[series_path],
+                series_name,
+                scales,
+                initial_step,
+                labels,
+            ),
+        )
+    if not multiple_series:
+        return series_models[0]
+    collection = Model(name, session)
+    collection.add(series_models)
+    return collection
+
+
 def _open_direct_label(
     session,
     label_group,
@@ -314,7 +360,7 @@ def _open_direct_label(
     if source_path == posixpath.normpath(label_path):
         raise OMEZarrFormatError(f"OME-Zarr label '{label_path}' refers to itself as its source image.")
     try:
-        source_group = _open_group(_store_from_filesystem(filesystem, source_path))
+        source_group = _open_group(session, _store_from_filesystem(filesystem, source_path))
         if ome_zarr_group_kind(source_group) != "image":
             raise OMEZarrFormatError(f"Referenced source '{source_path}' is not an OME-Zarr image group.")
     except Exception as error:
@@ -378,27 +424,19 @@ def _open(
     labels: bool = True,
     filesystem: Optional[AbstractFileSystem] = None,
 ) -> Tuple[List[Model], str]:
-    group = _open_group(root)
+    group = _open_group(session, root)
     kind = ome_zarr_group_kind(group)
     if kind == "image":
-        source_model, source_volumes = _prepare_image_model(session, group, scales, name, initial_step)
-        model = source_model
-        if labels:
-            try:
-                label_groups = _associated_label_groups(group)
-            except OMEZarrFormatError as error:
-                _warning(session, "Could not read associated OME-Zarr labels: {}", error)
-                label_groups = []
-            model = _attach_labels(
-                session,
-                name,
-                source_model,
-                group,
-                source_volumes,
-                label_groups,
-                scales,
-                initial_step,
-            )
+        model = _open_image_group(session, group, name, scales, initial_step, labels)
+    elif kind == "bioformats2raw":
+        model = _open_bioformats2raw_collection(
+            session,
+            group,
+            name,
+            scales,
+            initial_step,
+            labels,
+        )
     elif kind == "image-label":
         model = _open_direct_label(session, group, full_name, filesystem, scales, initial_step)
     elif kind == "labels":

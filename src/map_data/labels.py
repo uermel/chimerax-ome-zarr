@@ -5,7 +5,7 @@ from typing import List, Sequence, Tuple
 
 import numpy as np
 import zarr
-from chimerax.map.volume import Volume
+from chimerax.map.volume import Volume, set_data_cache
 from chimerax.map_data import GridData
 from chimerax.segmentations import Segmentation
 
@@ -365,6 +365,7 @@ def build_label_bridge(
         slice_name = " ".join([label_name, *suffix])
 
         index_grid = OMELabelIndexGrid(state, reference.data, f"{slice_name} index")
+        set_data_cache(index_grid, session)
         index_volume = Volume(session, index_grid)
         index_volume.name = f"{slice_name} index"
         index_volume.ome_image_label = label_metadata.image_label
@@ -385,6 +386,7 @@ def build_label_bridge(
             if suffix:
                 mask_name = f"{mask_name} {' '.join(suffix)}"
             mask_grid = OMELabelMaskGrid(state, reference.data, value_metadata.value, mask_name)
+            set_data_cache(mask_grid, session)
             segmentation = OMEZarrSegmentation(
                 session,
                 mask_grid,

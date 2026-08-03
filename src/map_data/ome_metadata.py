@@ -429,14 +429,99 @@ def _parse_image_label(raw_image_label: Any) -> Optional[ImageLabelMetadata]:
 
 
 def ome_zarr_group_kind(group: zarr.Group) -> str:
-    """Return ``image``, ``image-label``, ``labels``, or ``other`` for a group."""
+    """Return the supported OME-Zarr role of a group."""
 
     _, _, namespace = _metadata_namespace(group)
+    if "plate" in namespace:
+        return "other"
     if "multiscales" in namespace:
         return "image-label" if "image-label" in namespace else "image"
     if "labels" in namespace:
         return "labels"
+    if "bioformats2raw.layout" in namespace:
+        return "bioformats2raw"
     return "other"
+
+
+def _validate_relative_group_paths(raw_paths: Any, field: str) -> Tuple[str, ...]:
+    if not isinstance(raw_paths, Sequence) or isinstance(raw_paths, (str, bytes)):
+        raise OMEZarrFormatError(f"{field} metadata must be a list of relative group paths.")
+    paths = []
+    for path in raw_paths:
+        if not isinstance(path, str) or not path or path.startswith("/"):
+            raise OMEZarrFormatError(f"Every {field} entry must be a non-empty relative path.")
+        if any(part in {"", ".", ".."} for part in path.split("/")):
+            raise OMEZarrFormatError(f"{field} path '{path}' is not a normalized child path.")
+        if path in paths:
+            raise OMEZarrFormatError(f"{field} path '{path}' is duplicated.")
+        paths.append(path)
+    if not paths:
+        raise OMEZarrFormatError(f"{field} metadata does not declare any image groups.")
+    return tuple(paths)
+
+
+def bioformats2raw_series_paths(group: zarr.Group) -> Tuple[str, ...]:
+    """Return image-group paths from a version 3 bioformats2raw layout."""
+
+    zarr_format, _, namespace = _metadata_namespace(group)
+    layout = namespace.get("bioformats2raw.layout")
+    if layout != 3:
+        raise OMEZarrFormatError(f"Unsupported bioformats2raw layout {layout!r}; expected layout 3.")
+    if "plate" in namespace:
+        raise OMEZarrFormatError("Opening OME-Zarr plate layouts is not supported.")
+
+    raw_series = None
+    try:
+        ome_group = group["OME"]
+    except KeyError:
+        ome_group = None
+    if ome_group is not None:
+        if not isinstance(ome_group, zarr.Group):
+            raise OMEZarrFormatError("The bioformats2raw 'OME' node must be a Zarr group.")
+        ome_attrs = dict(ome_group.attrs)
+        if zarr_format == 3:
+            ome_namespace = ome_attrs.get("ome")
+            if ome_namespace is not None and not isinstance(ome_namespace, Mapping):
+                raise OMEZarrFormatError("Zarr v3 OME group metadata must be an object under attributes['ome'].")
+            if isinstance(ome_namespace, Mapping):
+                version = _version_family(ome_namespace.get("version", ""))
+                if version != "0.5":
+                    raise OMEZarrFormatError(
+                        "The Zarr v3 OME group must declare OME-Zarr version 0.5 when it contains series metadata.",
+                    )
+                raw_series = ome_namespace.get("series")
+        else:
+            raw_series = ome_attrs.get("series")
+
+    if raw_series is not None:
+        paths = _validate_relative_group_paths(raw_series, "bioformats2raw series")
+    else:
+        numbered_paths = []
+        index = 0
+        while True:
+            path = str(index)
+            try:
+                node = group[path]
+            except KeyError:
+                break
+            if not isinstance(node, zarr.Group):
+                raise OMEZarrFormatError(f"Bioformats2raw series path '{path}' is not a Zarr group.")
+            numbered_paths.append(path)
+            index += 1
+        if not numbered_paths:
+            raise OMEZarrFormatError("The bioformats2raw layout contains no numbered image groups starting at '0'.")
+        paths = tuple(numbered_paths)
+
+    for path in paths:
+        try:
+            node = group[path]
+        except KeyError as error:
+            raise OMEZarrFormatError(f"Bioformats2raw series path '{path}' does not exist.") from error
+        if not isinstance(node, zarr.Group):
+            raise OMEZarrFormatError(f"Bioformats2raw series path '{path}' is not a Zarr group.")
+        if ome_zarr_group_kind(node) != "image":
+            raise OMEZarrFormatError(f"Bioformats2raw series path '{path}' is not an OME-Zarr image group.")
+    return paths
 
 
 def parse_labels_metadata(group: zarr.Group) -> LabelsMetadata:

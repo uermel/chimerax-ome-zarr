@@ -80,7 +80,7 @@ jobs:
           cache-dependency-path: tests/requirements-portable.txt
       - name: Install portable test dependencies
         run: python -m pip install -r tests/requirements-portable.txt
-      - name: Open EBI v0.4, v0.5, and label stores
+      - name: Open EBI image, label, and bioformats2raw stores
         env:
           PYTHONPATH: ${{ github.workspace }}/tests/stubs:${{ github.workspace }}
         run: python -m pytest -vv --reruns 2 --reruns-delay 5 tests/portable/test_remote_stores.py

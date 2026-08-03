@@ -5,6 +5,7 @@ Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 - OME-Zarr 0.4 stored as Zarr v2 and OME-Zarr 0.5 stored as Zarr v3.
 - 2D and 3D images in YX/ZYX order, with optional leading time and channel axes.
 - Time series, multichannel images, and combined multichannel time series.
+- Bioformats2raw layout 3 image collections, using declared or consecutively numbered series paths.
 - OMERO channel names, colors, and active state.
 - OME-Zarr label collections and image-label metadata, including colors, properties, and source-image association.
 - Lazy integer index maps for ChimeraX's `segmentation surfaces` / `segmentation colors` commands.
@@ -15,7 +16,7 @@ Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 - Loading an integer-scaled, aligned pyramid as one Volume whose resolution follows ChimeraX's `step` setting.
 
 **Currently not supported:**
-- Plates and multi-image collections.
+- Plates and multi-image collection formats other than `bioformats2raw.layout`.
 - More than one `multiscales` entry in an image group.
 - Custom axes or spatial-axis reordering; spatial axes are interpreted positionally as YX or ZYX for CoPick compatibility.
 - Non-integer pyramid scaling.

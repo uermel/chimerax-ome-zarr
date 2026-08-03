@@ -41,7 +41,8 @@ PYTHONPATH="tests/stubs:$PWD" \
 python -m pytest -v -m "not remote" tests/portable
 ```
 
-The required remote check uses TLS verification, two retries, and small reads from the public EBI v0.4 image and combined v0.5 image/label stores:
+The required remote check uses TLS verification, two retries, and small reads from the public EBI v0.4 image,
+combined v0.5 image/label, and v0.5 bioformats2raw collection stores:
 
 ```bash
 PYTHONPATH="tests/stubs:$PWD" \

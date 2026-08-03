@@ -4,11 +4,17 @@ import numpy as np
 import pytest
 import zarr
 
-from src.map_data.ome_metadata import parse_ome_zarr_metadata
+from src.map_data.ome_metadata import (
+    bioformats2raw_series_paths,
+    ome_zarr_group_kind,
+    parse_ome_zarr_metadata,
+)
 
 
-def _make_tczyx_image(zarr_format):
-    group = zarr.create_group(store=zarr.storage.MemoryStore(), zarr_format=zarr_format)
+def _make_tczyx_image(zarr_format, *, store=None, path=None):
+    if store is None:
+        store = zarr.storage.MemoryStore()
+    group = zarr.create_group(store=store, path=path, zarr_format=zarr_format)
     axes = [
         {"name": "t", "type": "time", "unit": "second"},
         {"name": "c", "type": "channel"},
@@ -47,3 +53,27 @@ def test_parser_supports_time_channel_3d_and_identity(zarr_format, ome_version):
     assert [axis.type for axis in metadata.multiscales.axes] == ["time", "channel", "space", "space", "space"]
     assert metadata.multiscales.datasets[0].scale == (1.0,) * 5
     assert metadata.multiscales.datasets[0].translation == (0.0,) * 5
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+@pytest.mark.parametrize("explicit_series", [False, True])
+def test_bioformats2raw_series_discovery(zarr_format, explicit_series):
+    store = zarr.storage.MemoryStore()
+    root = zarr.create_group(store=store, zarr_format=zarr_format)
+    series_paths = ["images/first", "images/second"] if explicit_series else ["0", "1"]
+    if zarr_format == 2:
+        root.attrs["bioformats2raw.layout"] = 3
+    else:
+        root.attrs["ome"] = {"version": "0.5", "bioformats2raw.layout": 3}
+
+    if explicit_series:
+        ome_group = root.create_group("OME")
+        if zarr_format == 2:
+            ome_group.attrs["series"] = series_paths
+        else:
+            ome_group.attrs["ome"] = {"version": "0.5", "series": series_paths}
+    for path in series_paths:
+        _make_tczyx_image(zarr_format, store=store, path=path)
+
+    assert ome_zarr_group_kind(root) == "bioformats2raw"
+    assert bioformats2raw_series_paths(root) == tuple(series_paths)

@@ -4,10 +4,19 @@ import fsspec
 import pytest
 import zarr
 
-from src.map_data.ome_metadata import parse_labels_metadata, parse_ome_zarr_metadata
+from src.map_data.ome_metadata import (
+    bioformats2raw_series_paths,
+    ome_zarr_group_kind,
+    parse_labels_metadata,
+    parse_ome_zarr_metadata,
+)
 
 V04_IMAGE = "https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/idr0062A/6001240.zarr"
 V05_IMAGE_WITH_LABELS = "https://livingobjects.ebi.ac.uk/idr/zarr/v0.5/idr0062A/6001240_labels.zarr"
+V05_BIOFORMATS2RAW = (
+    "https://livingobjects.ebi.ac.uk/idr/zarr/v0.5/idr0051/"
+    "180712_H2B_22ss_Courtney1_20180712-163837_p00_c00_preview.zarr"
+)
 
 pytestmark = pytest.mark.remote
 
@@ -61,3 +70,18 @@ def test_remote_v05_image_and_labels_metadata_and_tiny_reads():
 
     coarsest = label_group[label_metadata.multiscales.datasets[-1].path]
     assert int(coarsest[0, 0, 0, 0]) == 0
+
+
+def test_remote_v05_bioformats2raw_collection_discovers_image():
+    root = _open_http_group(V05_BIOFORMATS2RAW)
+
+    assert ome_zarr_group_kind(root) == "bioformats2raw"
+    assert bioformats2raw_series_paths(root) == ("0",)
+
+    image = root["0"]
+    metadata = parse_ome_zarr_metadata(image)
+    assert [axis.name for axis in metadata.multiscales.axes] == ["t", "c", "z", "y", "x"]
+    assert [image[dataset.path].shape for dataset in metadata.multiscales.datasets] == [
+        (79, 1, 201, 333, 333),
+        (79, 1, 201, 166, 166),
+    ]
