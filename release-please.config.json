@@ -26,7 +26,7 @@
       "versioning": "prerelease",
       "prerelease-type": "alpha",
       "draft": false,
-      "prerelease": false,
+      "prerelease": true,
       "pull-request-footer": "Merging this PR will create a GitHub code release. Alpha versions are marked as GitHub prereleases."
     }
   }

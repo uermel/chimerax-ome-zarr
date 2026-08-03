@@ -1,0 +1,86 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OME_NGFF_SPEC_COMMIT: 5cdf83b6806b5e500477c7af69dae9ed2adcf77d
+  OME_ZARR_EXAMPLES_COMMIT: 8c10c88fbb77c3dcc206d9b234431f243beee576
+
+jobs:
+  portable:
+    name: portable py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v7
+      - name: Checkout pinned OME-NGFF suites
+        uses: actions/checkout@v7
+        with:
+          repository: ome/ngff
+          ref: ${{ env.OME_NGFF_SPEC_COMMIT }}
+          path: .upstream/ngff
+          persist-credentials: false
+          sparse-checkout: |
+            0.4/tests
+            0.5/tests
+            LICENSE.md
+      - name: Checkout pinned complete stores
+        uses: actions/checkout@v7
+        with:
+          repository: BioImageTools/ome-zarr-examples
+          ref: ${{ env.OME_ZARR_EXAMPLES_COMMIT }}
+          path: .upstream/ome-zarr-examples
+          persist-credentials: false
+          sparse-checkout: |
+            data
+            LICENSE
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: tests/requirements-portable.txt
+      - name: Install portable test dependencies
+        run: python -m pip install -r tests/requirements-portable.txt
+      - name: Run parser, conformance, and complete-store tests
+        env:
+          OME_NGFF_SPEC_ROOT: ${{ github.workspace }}/.upstream/ngff
+          OME_ZARR_EXAMPLES_ROOT: ${{ github.workspace }}/.upstream/ome-zarr-examples
+          PYTHONPATH: ${{ github.workspace }}/tests/stubs:${{ github.workspace }}
+          REQUIRE_UPSTREAM_FIXTURES: "1"
+        run: python -m pytest -v -m "not remote" tests/portable
+
+  remote:
+    name: required EBI remote stores
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tests/requirements-portable.txt
+      - name: Install portable test dependencies
+        run: python -m pip install -r tests/requirements-portable.txt
+      - name: Open EBI image, label, and bioformats2raw stores
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tests/stubs:${{ github.workspace }}
+        run: python -m pytest -vv --reruns 2 --reruns-delay 5 tests/portable/test_remote_stores.py

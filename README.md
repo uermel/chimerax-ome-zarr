@@ -1,20 +1,27 @@
 # chimerax-ome-zarr
-Plugin providing (limited) OME-Zarr v0.4 support for ChimeraX.
+Plugin providing OME-Zarr 0.4 and 0.5 image support for ChimeraX.
 
 **Currently supported:**
-- zyx-order multiscale volumes.
-- Opening local or remote zarr files
-- Loading specific multiscales as volumes (streamed on demand and cached in memory)
-- Loading all multiscales as a single Volume, accessible using Chimerax's `step` setting
+- OME-Zarr 0.4 stored as Zarr v2 and OME-Zarr 0.5 stored as Zarr v3.
+- 2D and 3D images in YX/ZYX order, with optional leading time and channel axes.
+- Time series, multichannel images, and combined multichannel time series.
+- Bioformats2raw layout 3 image collections, using declared or consecutively numbered series paths.
+- OMERO channel names, colors, and active state.
+- OME-Zarr label collections and image-label metadata, including colors, properties, and source-image association.
+- Lazy integer index maps for ChimeraX's `segmentation surfaces` / `segmentation colors` commands.
+- Native, editable ChimeraX `Segmentation` models for declared nonzero label values.
+- Local and remote Zarr stores supported by `fsspec`.
+- Identity, scale, and translation transformations, converted to ChimeraX Angstrom coordinates.
+- Loading specific resolution levels as separate volumes.
+- Loading an integer-scaled, aligned pyramid as one Volume whose resolution follows ChimeraX's `step` setting.
+- Adaptive decoded read-ahead for smoother first-pass playback of 3D time series.
 
 **Currently not supported:**
-- Labels data
-- Channel axes
-- Time axes
-- non-integer scaling
-- translation transformations
-- 2D data
-- multi-image files
+- Plates and multi-image collection formats other than `bioformats2raw.layout`.
+- More than one `multiscales` entry in an image group.
+- Custom axes or spatial-axis reordering; spatial axes are interpreted positionally as YX or ZYX for CoPick compatibility.
+- Non-integer pyramid scaling.
+- Automatic switching between translated levels that do not align with the finest grid. Such levels can still be opened separately with `scales`.
 
 Contributions are welcome.
 
@@ -59,6 +66,32 @@ open ngff:s3://bucket-name/path/to/file.zarr
 ```
 open ngff:s3://bucket-name/path/to/file.zarr scales 1,2
 ```
+
+For 3D time series, the plugin uses idle time after a frame is drawn to preload future timepoints at the same region,
+sampling step, channel, and resolution level. By default it fills an adaptive, memory-bounded buffer. To limit the
+buffer to a fixed number of future timepoints, or disable temporal read-ahead entirely:
+
+```
+open ngff:https://example.org/image.zarr readAhead 3
+open ngff:https://example.org/image.zarr readAhead 0
+```
+
+Read-ahead is best-effort: ChimeraX's built-in Map Series widget continues playing normally and waits for an
+unbuffered frame if playback catches the network. This decoded-data buffer is independent of the `vseries`
+`cacheFrames` rendering cache. Plane display continues to use chunk-aligned spatial caching without temporal reads.
+
+Associated label images are opt-in and opened hidden when requested. Each label image is available as an integer
+index map, while label values declared in OME `colors` or `properties` metadata also appear as editable masks in
+ChimeraX's **Segmentations** tool. To discover and open associated labels:
+
+```
+open /path/to/file.zarr labels true
+```
+
+Label edits are copy-on-write: they update the in-session index map and sibling masks, but never modify the opened
+OME-Zarr store. Use ChimeraX's existing segmentation save formats to export an edited mask. If a label image does not
+declare its label values, the plugin preserves the complete index map without scanning the finest-resolution array,
+but does not create editable masks automatically. Value 0 is treated as background by the ChimeraX segmentation bridge.
 
 **NOTE:** in order to open files from remote locations other than S3, you may have to install additional python
 packages (e.g. `smbprotocol` for SAMBA shares).
