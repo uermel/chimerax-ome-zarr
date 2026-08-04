@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha](https://github.com/uermel/chimerax-ome-zarr/compare/v0.7.1...v1.0.0-alpha) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* Support a subset of OME-Zarr v0.5 ([#16](https://github.com/uermel/chimerax-ome-zarr/issues/16))
+
+### ✨ Features
+
+* Support a subset of OME-Zarr v0.5 ([#16](https://github.com/uermel/chimerax-ome-zarr/issues/16)) ([8794801](https://github.com/uermel/chimerax-ome-zarr/commit/879480101c28ccb0ad5d6193bf48382f0c867e5c))
+
 ## [0.7.1](https://github.com/uermel/chimerax-ome-zarr/compare/v0.7.0...v0.7.1) (2026-08-03)
 
 
