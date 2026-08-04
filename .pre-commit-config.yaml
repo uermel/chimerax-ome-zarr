@@ -4,9 +4,9 @@ repos:
   hooks:
   - id: black
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.12.5
+  rev: v0.0.292
   hooks:
-  - id: ruff-check
+  - id: ruff
     args:
     - --fix
 - repo: https://github.com/pre-commit/pre-commit-hooks

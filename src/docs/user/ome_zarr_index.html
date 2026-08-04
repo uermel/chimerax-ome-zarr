@@ -26,29 +26,25 @@
     <p><a><b><a href="https://ngff.openmicroscopy.org/latest/">OME-Zarr</a></b> is a next generation file format
         specification for storing bioimaging data on the cloud.</a></p>
 
-    <p><a>This plugin opens OME-Zarr 0.4 (Zarr v2) and OME-Zarr 0.5 (Zarr v3) images in ChimeraX.</a></p>
+    <p><a>This plugin provides limited support for OME-Zarr files in ChimeraX.</a></p>
 
     <p><a><b>Currently supported:</b></a></p>
     <ul>
-        <li>YX- and ZYX-order multiscale images with optional leading time and channel axes.</li>
-        <li>OME-Zarr 0.4/Zarr v2 and OME-Zarr 0.5/Zarr v3 storage.</li>
-        <li>Bioformats2raw layout 3 image collections with declared or consecutively numbered series.</li>
+        <li>ZYX-order multiscale volumes.</li>
         <li>Opening local or remote zarr files.</li>
-        <li>Identity, scale, and translation transformations in physical units.</li>
-        <li>OMERO channel names, colors, and active state.</li>
-        <li>Opt-in associated OME-Zarr label images as lazy integer index maps.</li>
-        <li>Declared nonzero label values as editable models in ChimeraX's <b>Segmentations</b> tool when labels are requested.</li>
         <li>Loading specific multiscales as volumes (streamed on demand and cached in memory).</li>
         <li>Loading all multiscales as a single Volume, accessible using Chimerax's <b>step setting</b>.</li>
-        <li>Adaptive, memory-bounded decoded read-ahead for 3D time-series playback.</li>
     </ul>
 
     <p><a><b>Currently not (yet) supported: </b></a></p>
     <ul>
-        <li>Plates, collection formats other than bioformats2raw, or multiple multiscales entries.</li>
-        <li>Custom axes or spatial-axis reordering.</li>
-        <li>Non-integer pyramid scaling.</li>
-        <li>Automatic switching between translated levels that do not align to the finest grid.</li>
+        <li>Labels data.</li>
+        <li>Channel axes.</li>
+        <li>Time axes.</li>
+        <li>non-integer scaling.</li>
+        <li>translation transformations.</li>
+        <li>2D data.</li>
+        <li>multi-image files.</li>
     </ul>
 
     <ul class="none" style="list-style: none;">

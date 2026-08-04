@@ -7,35 +7,21 @@
   <body> <a name="top"></a>
     <h3><a href="../ome_zarr_index.html#commands">Command</a>: open</h3>
     <h3 class="usage"><a href="usageconventions.html">Usage</a>:
-      <b>open</b> (  <i>filename.zarr</i> | <i>ngff:[<b>protocol</b>:]URL.zarr</i>  )</a>
-      [ <i>scales scale1,scale2,...</i> ] [ <i>labels true|false</i> ] [ <i>readAhead N</i> ]
+      <b>open</b> (  <i>filename.zarr</i> | <i>ngff:[<b>protocol</b>:]URL.zarr</i>  )</a> [ <i>scales scale1,scale2,... </i>]
     </h3>
     <p> OME-Zarr files can be opened with the <b>open</b>-command similar to any other ChimeraX-supported file. When
         appending the "ngff:"-prefix to the URL and including a protocol prefix (such as "s3://" or "smb://") allow
-        loading Zarr files from remote storage. OME-Zarr 0.4/Zarr v2 and OME-Zarr 0.5/Zarr v3 images are
-        detected automatically. YX/ZYX images may include leading time and channel axes. Bioformats2raw layout 3
-        roots are resolved automatically, and all declared or consecutively numbered image series are opened.
+        loading Zarr files from remote storage.
 
-        When no scales are specified, this command creates lazily loaded multiscale Volumes and chooses a compatible
-        resolution from the "step" setting of the volume command or Volume Viewer. When scales are specified, each
-        selected level is opened independently, including its time/channel hierarchy and physical origin.<br>
-        Associated OME-Zarr labels are opt-in and opened hidden when requested. Their integer index maps work with the
-        <b>segmentation surfaces</b> and <b>segmentation colors</b> commands. Nonzero label values declared in
-        image-label colors or properties metadata are also registered as editable models in ChimeraX's
-        <b>Segmentations</b> tool. Set <b>labels true</b> to discover and open associated labels.<br>
-        For 3D time series, temporal read-ahead preserves the current region, sampling step, channel, and resolution
-        level. If <b>readAhead</b> is omitted, an adaptive memory-bounded buffer is filled after the current frame is
-        drawn. Set <b>readAhead</b> to a nonnegative number to limit the number of future timepoints, or 0 to disable
-        it. Read-ahead is best-effort and does not delay the built-in Map Series player. Plane display does not trigger
-        temporal reads.<br>
-        Editing an imported mask updates the in-session label map but does not write to the OME-Zarr store.<br>
+        When no scales are specified, this command will create a single Volume per Zarr-file that will stream and
+        cache data on demand (multiscale level determined by the "step" setting of the volume command or volume
+        viewer. When scales are specified, the same number of Volumes will be loaded simultaneously, each containing
+        one of the multiscale levels.<br>
       <br>
       Examples: </p>
     <blockquote> <b>open /path/to/image.zarr</b> - open a local OME-Zarr</blockquote>
     <blockquote> <b>open ngff:s3://bucket/path/to/image.zarr</b> - open an OME-Zarr from AWS S3</blockquote>
     <blockquote> <b>open ngff:s3://bucket/path/to/image.zarr scales 1,2</b> - open two multiscale levels of an OME-Zarr from AWS S3</blockquote>
-    <blockquote> <b>open ngff:https://example.org/image.zarr readAhead 3</b> - buffer at most three future timepoints</blockquote>
-    <blockquote> <b>open /path/to/image.zarr labels true</b> - open an image with associated labels</blockquote>
     <p></p>
     <hr>
     <address>Utz H. Ermel / April 2024</address>

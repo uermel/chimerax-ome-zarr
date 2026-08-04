@@ -21,16 +21,12 @@ class _MyAPI(BundleAPI):
 
     @staticmethod
     def get_class(name):
-        from .map_data.labels import OMELabelIndexGrid, OMELabelMaskGrid, OMEZarrSegmentation
         from .map_data.zarr_grid import WrappedZarrGrid, ZarrGrid, ZarrModel
 
         clsdict = {
             "ZarrModel": ZarrModel,
             "WrappedZarrGrid": WrappedZarrGrid,
             "ZarrGrid": ZarrGrid,
-            "OMELabelIndexGrid": OMELabelIndexGrid,
-            "OMELabelMaskGrid": OMELabelMaskGrid,
-            "OMEZarrSegmentation": OMEZarrSegmentation,
         }
 
         return clsdict[name]
