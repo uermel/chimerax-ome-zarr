@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.2](https://github.com/uermel/chimerax-ome-zarr/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-08-30)
+
+
+### ✨ Features
+
+* add Lodstone progressive streaming ([#22](https://github.com/uermel/chimerax-ome-zarr/issues/22)) ([98160c3](https://github.com/uermel/chimerax-ome-zarr/commit/98160c3009686fec507cd0fbfe039e07a50b4fe6))
+
+
+### 🧹 Miscellaneous Chores
+
+* update Lodstone to 0.1.0a1 ([#24](https://github.com/uermel/chimerax-ome-zarr/issues/24)) ([ee5a340](https://github.com/uermel/chimerax-ome-zarr/commit/ee5a3403d4ccf1779d9ed021368f65f5cd855523))
+
 ## [1.0.0-alpha.1](https://github.com/uermel/chimerax-ome-zarr/compare/v1.0.0-alpha...v1.0.0-alpha.1) (2026-08-18)
 
 
