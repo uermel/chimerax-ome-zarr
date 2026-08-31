@@ -1,6 +1,7 @@
 """Native ChimeraX integration and reader tests."""
 
 from copy import deepcopy
+from threading import Lock
 
 import fsspec
 import numpy as np
@@ -608,6 +609,31 @@ def test_lodstone_snapshot_is_immutable_and_upload_bounded():
     assert bounded_region.start != region.start
     with pytest.raises(ValueError):
         snapshot[...] = 2
+
+
+def test_lodstone_target_reports_renderer_upload_boundaries():
+    target = ChimeraXVolumeTarget.__new__(ChimeraXVolumeTarget)
+    target._state_lock = Lock()
+    target._submitted_bytes = 0
+    target._uploaded_bytes = 0
+    target._pending_upload_bytes = 0
+    target._presentations = 0
+    target._upload_seconds = 0.0
+    target._max_upload_stall_seconds = 0.0
+    target._pending_uploads = {}
+    volume = object()
+
+    target._record_renderer_submission(volume, 4096)
+    pending = target.performance_metrics()
+    assert pending.submitted_bytes == 4096
+    assert pending.pending_upload_bytes == 4096
+
+    target._record_renderer_upload(volume, 0.025)
+    uploaded = target.performance_metrics()
+    assert uploaded.uploaded_bytes == 4096
+    assert uploaded.pending_upload_bytes == 0
+    assert uploaded.upload_seconds == 0.025
+    assert uploaded.max_upload_stall_seconds == 0.025
 
 
 def test_chimerax_dispatcher_runs_one_callback_per_graphics_cycle():

@@ -79,7 +79,7 @@ Daily:
 ```bash
 export CHIMERAX_PYTHON=/Applications/ChimeraX_Daily.app/Contents/bin/python3.14
 "$CHIMERAX_PYTHON" -m pip install --no-deps --force-reinstall \
-  lodstone==0.1.0a1
+  lodstone==0.1.0a2
 PYTHONPATH="$PWD" "$CHIMERAX_PYTHON" -m chimerax.core --nogui --exit \
   --cmd "devel build ."
 "$CHIMERAX_PYTHON" -m chimerax.core --nogui --exit --cmd \

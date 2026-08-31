@@ -16,6 +16,7 @@ from chimerax.map import volume_from_grid_data
 from chimerax.map_data import ArrayGridData
 from lodstone import (
     Layout,
+    PerformanceRecorder,
     PlanCoverage,
     Planner,
     Region,
@@ -25,6 +26,7 @@ from lodstone import (
     ResidentWindow,
     Runtime,
     Stream,
+    TargetDiagnostics,
     TileKey,
     Update,
     View,
@@ -226,6 +228,13 @@ class ChimeraXVolumeTarget:
         self._masked_focus = None
         self._display_state = None
         self._synchronizing_display = False
+        self._submitted_bytes = 0
+        self._uploaded_bytes = 0
+        self._pending_upload_bytes = 0
+        self._presentations = 0
+        self._upload_seconds = 0.0
+        self._max_upload_stall_seconds = 0.0
+        self._pending_uploads = {}
 
         # Establish bounds before the first camera-driven plan. This lets the
         # normal ChimeraX open/view logic position the camera around the data.
@@ -259,6 +268,40 @@ class ChimeraXVolumeTarget:
             focus_depth_weight=0.5,
             focus_depth_target=0.5,
         )
+
+    def performance_metrics(self) -> TargetDiagnostics:
+        """Report ChimeraX texture submission and upload boundaries."""
+        with self._state_lock:
+            return TargetDiagnostics(
+                submitted_bytes=self._submitted_bytes,
+                uploaded_bytes=self._uploaded_bytes,
+                pending_upload_bytes=self._pending_upload_bytes,
+                presentations=self._presentations,
+                upload_seconds=self._upload_seconds,
+                max_upload_stall_seconds=self._max_upload_stall_seconds,
+            )
+
+    def _record_renderer_submission(self, volume, size: int) -> None:
+        with self._state_lock:
+            self._submitted_bytes += size
+            self._pending_upload_bytes += size
+            self._pending_uploads[volume] = size
+
+    def _record_renderer_upload(self, volume, duration: float) -> None:
+        with self._state_lock:
+            size = self._pending_uploads.pop(volume, 0)
+            self._pending_upload_bytes -= size
+            self._uploaded_bytes += size
+            self._upload_seconds += duration
+            self._max_upload_stall_seconds = max(
+                self._max_upload_stall_seconds,
+                duration,
+            )
+
+    def _discard_pending_upload(self, volume) -> None:
+        with self._state_lock:
+            size = self._pending_uploads.pop(volume, 0)
+            self._pending_upload_bytes -= size
 
     def register_plan(self, plan, request_epoch: int, reason: str) -> None:
         with self._state_lock:
@@ -415,6 +458,7 @@ class ChimeraXVolumeTarget:
                 request_epoch=publication.request_epoch,
                 reason=publication.reason,
             )
+            self._record_renderer_submission(volume, publication.bytes)
             self.resources[window] = (publication.array, grid, volume)
             if old_resource is not None and not self._is_front_volume(old_resource[2]):
                 self._timed_delete(old_resource[2], publication)
@@ -724,6 +768,7 @@ class ChimeraXVolumeTarget:
     ) -> None:
         previous_pending = self._pending_publication
         if previous_pending is not None and previous_pending[1] is not volume:
+            self._discard_pending_upload(previous_pending[1])
             self._delete_volume(previous_pending[1])
         token = object()
         self._pending_publication = (token, volume)
@@ -739,14 +784,17 @@ class ChimeraXVolumeTarget:
                 return
             resource = self.resources.get(window)
             if volume.deleted or resource is None or resource[2] is not volume:
+                self._discard_pending_upload(volume)
                 return
             # Texture creation during a graphics-update trigger can disturb
             # that frame on older ChimeraX Dailies. Run between frames instead.
             started = perf_counter()
             volume.update_drawings()
-            self._record_timing(
+            duration = perf_counter() - started
+            self._record_renderer_upload(volume, duration)
+            self._record_duration(
                 "volume.update_drawings",
-                started,
+                duration,
                 publication.bytes,
                 publication.request_epoch,
                 publication.level,
@@ -781,6 +829,7 @@ class ChimeraXVolumeTarget:
 
     def _timed_delete(self, volume, publication: PreparedPublication) -> None:
         started = perf_counter()
+        self._discard_pending_upload(volume)
         self._delete_volume(volume)
         self._publication_context.pop(volume, None)
         self._record_timing(
@@ -800,6 +849,8 @@ class ChimeraXVolumeTarget:
         started = perf_counter()
         retired = self._activate_back(level)
         if publication is not None:
+            with self._state_lock:
+                self._presentations += 1
             self._record_timing(
                 "front_back_activation",
                 started,
@@ -1157,6 +1208,11 @@ class LodstoneVolumeController:
             batch_size=8,
             runtime=owner.runtime,
         )
+        self.performance = PerformanceRecorder(
+            self.stream,
+            host="chimerax",
+            backend="opengl",
+        )
         self._disconnect_status = self.stream.on_status_changed(self._status_changed)
         self._handler = self.session.triggers.add_handler("graphics update", self._graphics_update)
 
@@ -1345,6 +1401,7 @@ class LodstoneVolumeController:
             self._handler = None
         self._disconnect_status()
         self.stream.close()
+        self.performance.close()
         self._planning_executor.shutdown(wait=False, cancel_futures=True)
 
 
@@ -1436,6 +1493,11 @@ class LodstoneZarrModel(Model):
             key=lambda record: record.duration_ms,
             default=None,
         )
+
+    @property
+    def lodstone_performance_records(self) -> tuple[dict, ...]:
+        """Comparable stream and renderer measurements for every channel."""
+        return tuple(record for controller in self.controllers for record in controller.performance.records())
 
     def present_lodstone_level(self, level: int) -> None:
         candidates = []

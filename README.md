@@ -77,7 +77,7 @@ open ngff:s3://bucket-name/path/to/file.zarr scales 1,2
 
 ```bash
 /Applications/ChimeraX_Daily.app/Contents/bin/pip install \
-  lodstone==0.1.0a1
+  lodstone==0.1.0a2
 ```
 
 ```chimerax
